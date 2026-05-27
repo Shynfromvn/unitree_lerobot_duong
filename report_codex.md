@@ -1,258 +1,67 @@
-# Codex report: HeadcamOnly training workflow
+# Codex report: G1 Dex3 HeadcamOnly workflow
 
 Date: 2026-05-27
 
-## Summary
-
-I updated the project so the new G1 Dex3 headcam-only dataset can be used through the repository's existing README workflow, without requiring a separate train script or a separate validator script.
-
-The main design decision was:
+This report records the practical changes made for training with the generated dataset:
 
 ```text
-Use README.md as the single source of truth for load -> convert -> train -> eval -> replay.
+G1_Dex3_PickApple_Dataset_HeadcamOnly
 ```
 
-This avoids having multiple ways to run the same pipeline. It also makes the instructions suitable for publishing to GitHub because the commands no longer contain machine-specific absolute paths such as a local drive path.
+The goal is to keep the repository GitHub-friendly: no local absolute drive paths, no extra train wrapper, and one consistent workflow that a teammate can copy from `README.md` after cloning.
 
-## Dataset contract used by the workflow
+## Final dataset contract
 
-The workflow is built around this dataset identity:
+The training/eval workflow uses this LeRobot dataset contract:
 
 ```text
-dataset repo id: G1_Dex3_PickApple_Dataset_HeadcamOnly
-robot type:      Unitree_G1_Dex3_HeadcamOnly
-camera key:      observation.images.head_cam
-state shape:     [28]
-action shape:    [28]
-fps:             30
+source dataset:       unitreerobotics/G1_Dex3_PickApple_Dataset
+local dataset id:     G1_Dex3_PickApple_Dataset_HeadcamOnly
+robot type:           Unitree_G1_Dex3_HeadcamOnly
+camera key:           observation.images.head_cam
+source camera key:    observation.images.cam_left_high
+state shape:          [28]
+action shape:         [28]
+fps:                  30
+LeRobot format:       v3.0
 ```
 
-The dataset root is intentionally not hard-coded. In README, it is derived from the current repo location:
+Important naming decision:
+
+```text
+observation.images.head_cam
+```
+
+This is the camera key agreed by the team. All load, train, eval, and replay commands must stay aligned with this key through the generated dataset metadata.
+
+## Canonical path variables
+
+The README now avoids hard-coded local paths. It derives the dataset path from the repo location:
 
 ```powershell
 $PROJECT_ROOT = (Get-Location).Path
-$DATASET_ROOT = (Resolve-Path (Join-Path $PROJECT_ROOT "..\datasets")).Path
+$DATASET_PARENT = Join-Path (Split-Path $PROJECT_ROOT -Parent) "datasets"
 $DATASET_REPO_ID = "G1_Dex3_PickApple_Dataset_HeadcamOnly"
-$ROBOT_TYPE = "Unitree_G1_Dex3_HeadcamOnly"
-```
-
-If someone clones the repo elsewhere, they only need to place `datasets/` next to the repo or override `$DATASET_ROOT`.
-
-## Execution pipeline
-
-Run this pipeline from a fresh shell. It follows the repository README flow and uses the existing LeRobot scripts directly.
-
-### 1. Create and activate environment
-
-```powershell
-conda create -n unitree_lerobot -c conda-forge python=3.10 pinocchio ffmpeg -y
-conda activate unitree_lerobot
-```
-
-This solves `python`, `pinocchio`, and `ffmpeg` together from `conda-forge`, which avoids dependency conflicts seen when installing them in separate steps.
-
-### 2. Install project packages
-
-Run from the repository root:
-
-```powershell
-$PROJECT_ROOT = (Get-Location).Path
-
-cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
-pip install -e .
-
-cd $PROJECT_ROOT
-pip install -e .
-```
-
-### 3. Define dataset variables once
-
-Default layout:
-
-```text
-parent-folder/
-  datasets/
-    G1_Dex3_PickApple_Dataset_HeadcamOnly/
-  unitree_lerobot/
-```
-
-PowerShell variables:
-
-```powershell
-$PROJECT_ROOT = (Get-Location).Path
-$DATASET_ROOT = Join-Path (Split-Path $PROJECT_ROOT -Parent) "datasets"
-$DATASET_REPO_ID = "G1_Dex3_PickApple_Dataset_HeadcamOnly"
+$DATASET_DIR = Join-Path $DATASET_PARENT $DATASET_REPO_ID
 $SOURCE_DATASET_REPO_ID = "unitreerobotics/G1_Dex3_PickApple_Dataset"
 $SOURCE_DATASET_NAME = "G1_Dex3_PickApple_Dataset"
-$ROBOT_TYPE = "Unitree_G1_Dex3_HeadcamOnly"
-
-New-Item -ItemType Directory -Force $DATASET_ROOT | Out-Null
+$SOURCE_DATASET_DIR = Join-Path $DATASET_PARENT $SOURCE_DATASET_NAME
 ```
 
-If your dataset is not next to the repo, override only this:
+Meaning:
 
-```powershell
-$DATASET_ROOT = "<path-to-folder-containing-G1_Dex3_PickApple_Dataset_HeadcamOnly>"
-```
+- `$DATASET_PARENT`: folder containing datasets.
+- `$DATASET_DIR`: actual LeRobot dataset root passed to `--dataset.root` and `--root`.
+- `$SOURCE_DATASET_DIR`: downloaded original multi-camera dataset.
 
-### 4. Download source dataset on a new machine
-
-Use this when the GitHub repo does not include `datasets/`.
-
-`$SOURCE_DATASET_REPO_ID` points to the Hugging Face dataset repo that contains the original multi-camera G1 Dex3 PickApple dataset. Keep `$SOURCE_DATASET_NAME` as the local folder name.
-
-```powershell
-$SOURCE_DATASET_DIR = Join-Path $DATASET_ROOT $SOURCE_DATASET_NAME
-
-# Run this first if the source dataset is private:
-# huggingface-cli login
-
-python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id=r'$SOURCE_DATASET_REPO_ID', repo_type='dataset', local_dir=r'$SOURCE_DATASET_DIR')"
-```
-
-Expected source dataset layout after download:
+The important bug avoided here:
 
 ```text
-datasets/
-  G1_Dex3_PickApple_Dataset/
-    data/
-    meta/
-    videos/
+Wrong: --dataset.root=<parent datasets folder>
+Right: --dataset.root=<actual HeadcamOnly dataset folder>
 ```
 
-The source dataset must contain this camera feature:
-
-```text
-observation.images.cam_left_high
-```
-
-That source camera is copied into the training camera:
-
-```text
-observation.images.cam_left_high -> observation.images.head_cam
-```
-
-### 5. Convert source dataset to HeadcamOnly
-
-This step creates the dataset used by training:
-
-```powershell
-$SOURCE_DATASET_DIR = Join-Path $DATASET_ROOT $SOURCE_DATASET_NAME
-$TARGET_DATASET_DIR = Join-Path $DATASET_ROOT $DATASET_REPO_ID
-
-python unitree_lerobot/utils/create_headcam_only_dataset.py `
-    --src-dir "$SOURCE_DATASET_DIR" `
-    --dst-dir "$TARGET_DATASET_DIR" `
-    --source-video-key observation.images.cam_left_high `
-    --target-video-key observation.images.head_cam `
-    --overwrite
-```
-
-Important:
-
-- `--overwrite` replaces an existing generated HeadcamOnly dataset.
-- Do not point `--src-dir` and `--dst-dir` to the same folder.
-- `unitree_lerobot/utils/create_headcam_only_dataset.py` must be committed to GitHub with the repo, otherwise a fresh clone cannot run this conversion.
-- `$SOURCE_DATASET_REPO_ID` is set to `unitreerobotics/G1_Dex3_PickApple_Dataset`, the original multi-camera dataset on Hugging Face.
-
-### 6. Check converted dataset metadata
-
-```powershell
-python -c "from pathlib import Path; import json; root=Path(r'$DATASET_ROOT') / '$DATASET_REPO_ID'; info=json.loads((root/'meta/info.json').read_text()); print(info['codebase_version']); print(info['robot_type']); print([k for k in info['features'] if k.startswith('observation.images.')]); print(info['features']['observation.state']['shape'], info['features']['action']['shape'])"
-```
-
-Expected:
-
-```text
-v3.0
-Unitree_G1_Dex3_HeadcamOnly
-['observation.images.head_cam']
-[28] [28]
-```
-
-### 7. Optional: visualize one episode
-
-```powershell
-cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
-
-python src/lerobot/scripts/lerobot_dataset_viz.py `
-    --repo-id "$DATASET_REPO_ID" `
-    --root "$DATASET_ROOT" `
-    --episode-index 0
-```
-
-### 8. Smoke test training
-
-Run one step before long training:
-
-```powershell
-python src/lerobot/scripts/lerobot_train.py `
-    --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_ROOT" `
-    --policy.push_to_hub=false `
-    --policy.type=act `
-    --steps=1 `
-    --batch_size=1 `
-    --num_workers=0 `
-    --eval_freq=0 `
-    --save_checkpoint=false
-```
-
-### 9. Start training
-
-```powershell
-python src/lerobot/scripts/lerobot_train.py `
-    --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_ROOT" `
-    --policy.push_to_hub=false `
-    --policy.type=act `
-    --eval_freq=0
-```
-
-### 10. Evaluate trained policy on dataset
-
-Replace `<run>` and `<step>` with your output checkpoint path.
-
-```powershell
-cd $PROJECT_ROOT
-
-python unitree_lerobot/eval_robot/eval_g1_dataset.py `
-    --policy.path="unitree_lerobot/lerobot/outputs/train/<run>/checkpoints/<step>/pretrained_model" `
-    --repo_id=$DATASET_REPO_ID `
-    --root="$DATASET_ROOT" `
-    --episodes=0 `
-    --frequency=30 `
-    --arm="G1_29" `
-    --ee="dex3" `
-    --visualization=true `
-    --send_real_robot=false
-```
-
-### 11. Optional: replay dataset
-
-```powershell
-python unitree_lerobot/eval_robot/replay_robot.py `
-    --repo_id=$DATASET_REPO_ID `
-    --root="$DATASET_ROOT" `
-    --episodes=0 `
-    --frequency=30 `
-    --arm="G1_29" `
-    --ee="dex3" `
-    --visualization=true
-```
-
-### 12. If converting new raw JSON later
-
-Only use this when you have raw Unitree JSON data, not for the existing LeRobot dataset.
-
-```powershell
-$RAW_DATA_ROOT = "<path-to-raw-json-dataset>"
-
-python unitree_lerobot/utils/convert_unitree_json_to_lerobot.py `
-    --raw-dir "$RAW_DATA_ROOT" `
-    --repo-id "$DATASET_REPO_ID" `
-    --robot_type "$ROBOT_TYPE"
-```
+If the root points to the parent folder, LeRobot looks for `meta/info.json` in the wrong place, then falls back to Hugging Face and returns 404 for the local-only dataset id.
 
 ## Files changed
 
@@ -260,109 +69,126 @@ python unitree_lerobot/utils/convert_unitree_json_to_lerobot.py `
 
 Purpose:
 
-- Make the headcam-only dataset usable from the official repo workflow.
-- Keep one shared set of variables for all stages.
-- Remove hard-coded local paths so the README is GitHub-safe.
-- Avoid introducing a second train entrypoint.
+- Make the HeadcamOnly workflow executable from a fresh clone.
+- Keep the original repo style and original LeRobot entrypoints.
+- Avoid machine-specific paths so the repo can be pushed to GitHub.
+- Document the exact sequence that worked locally.
 
-Sections changed:
+Main changes:
+
+- Updated conda setup to the working combined command:
+
+```powershell
+conda create -n unitree_lerobot -c conda-forge python=3.10 pinocchio ffmpeg -y
+conda activate unitree_lerobot
+```
+
+Why:
+
+- Installing `python`, `pinocchio`, and `ffmpeg` together from `conda-forge` avoids the dependency conflicts seen with separate installs.
+
+- Added CUDA verification and a compatible CUDA wheel example:
+
+```powershell
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda)"
+pip install --upgrade torch==2.6.0+cu121 torchvision==0.21.0+cu121 torchaudio==2.6.0+cu121 --index-url https://download.pytorch.org/whl/cu121
+```
+
+Why:
+
+- The earlier CPU-only setup made training run on CPU.
+- `torchvision` must stay compatible with LeRobot (`>=0.21`, `<0.23`), so the README avoids the incompatible `torchvision==0.20.1` combination.
+
+- Added a dedicated copy-run section:
 
 ```text
-2.1 Load Datasets
-2.4.2 Conversion
-3 Training
-4 Real-World Testing
-5 Replay Datasets On Robot
+1.3 G1 Dex3 HeadcamOnly Copy-Run Pipeline
 ```
 
-#### Section 2.1: Load Datasets
+This section contains:
 
-What was added:
-
-- A shared portable variable block:
-
-```powershell
-$PROJECT_ROOT = (Get-Location).Path
-$DATASET_ROOT = (Resolve-Path (Join-Path $PROJECT_ROOT "..\datasets")).Path
-$DATASET_REPO_ID = "G1_Dex3_PickApple_Dataset_HeadcamOnly"
-$ROBOT_TYPE = "Unitree_G1_Dex3_HeadcamOnly"
-```
-
-- A Python snippet that loads the local dataset through `LeRobotDataset`.
-- Expected metadata for quick validation.
-- A local visualization command using the same variables.
+- shared path variables;
+- source dataset download from Hugging Face;
+- HeadcamOnly conversion;
+- metadata verification;
+- 5-episode train-test;
+- full-data train command;
+- eval command using the saved checkpoint.
 
 Why:
 
-- The original README only showed the public Hugging Face dataset.
-- Your new dataset is local, so users need both `repo_id` and `root`.
-- Using shared variables prevents later commands from drifting.
+- The team can clone the repo, open README, and run one coherent workflow without reconstructing the steps from chat.
 
-#### Section 2.4.2: Conversion
-
-What was added:
+- Replaced older `$DATASET_ROOT` usage with:
 
 ```powershell
-$RAW_DATA_ROOT = "<path-to-raw-json-dataset>"
-
-python unitree_lerobot/utils/convert_unitree_json_to_lerobot.py `
-    --raw-dir "$RAW_DATA_ROOT" `
-    --repo-id "$DATASET_REPO_ID" `
-    --robot_type "$ROBOT_TYPE"
+$DATASET_PARENT
+$DATASET_DIR
 ```
 
 Why:
 
-- `constants.py` now contains `Unitree_G1_Dex3_HeadcamOnly`.
-- New raw JSON conversions should use the same robot type and produce `observation.images.head_cam`.
-- The raw data path is a placeholder instead of a local machine path.
+- `$DATASET_ROOT` was ambiguous and caused an actual train error when it pointed to the parent `datasets/` folder.
+- `$DATASET_DIR` is explicit: it is the real LeRobot dataset folder containing `meta/info.json`.
 
-#### Section 3: Training
+- Added Windows checkpoint note:
 
-What was added:
-
-```powershell
-cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
-
-python src/lerobot/scripts/lerobot_train.py `
-    --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_ROOT" `
-    --policy.push_to_hub=false `
-    --policy.type=act `
-    --eval_freq=0
-```
-
-Also added a one-step smoke test:
-
-```powershell
-python src/lerobot/scripts/lerobot_train.py `
-    --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_ROOT" `
-    --policy.push_to_hub=false `
-    --policy.type=act `
-    --steps=1 `
-    --batch_size=1 `
-    --num_workers=0 `
-    --eval_freq=0 `
-    --save_checkpoint=false
+```text
+WinError 1314
 ```
 
 Why:
 
-- This keeps training on the original LeRobot train script.
-- No extra wrapper script is needed.
-- `--dataset.root` makes the local dataset explicit.
-- `--eval_freq=0` avoids creating an eval environment for offline dataset training.
+- On Windows VS Code terminals, LeRobot may save the real checkpoint and then fail when creating `checkpoints/last`, because symlink creation needs Developer Mode or admin privileges.
+- The real usable model path is still:
 
-#### Section 4: Real-World Testing
+```text
+outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model
+```
 
-What was added:
+Effect:
+
+- Teammates know that Ubuntu/Linux full training should save normally.
+- Windows users know how to interpret the symlink error and where the real model is.
+
+### 2. `unitree_lerobot/eval_robot/eval_g1_dataset.py`
+
+Purpose:
+
+- Make dataset evaluation use the local dataset path passed in the command.
+
+Change:
+
+```python
+dataset = LeRobotDataset(repo_id=cfg.repo_id, root=cfg.root)
+```
+
+Before:
+
+```python
+dataset = LeRobotDataset(repo_id=cfg.repo_id)
+```
+
+Why:
+
+- The script accepted `--root`, but ignored it.
+- With local repo id `G1_Dex3_PickApple_Dataset_HeadcamOnly`, the script tried to load from:
+
+```text
+~/.cache/huggingface/lerobot/G1_Dex3_PickApple_Dataset_HeadcamOnly
+```
+
+and then from Hugging Face, which failed with 404 because this generated dataset is local.
+
+Effect:
+
+- This command now evaluates against the same local dataset used for training:
 
 ```powershell
 python unitree_lerobot/eval_robot/eval_g1_dataset.py `
-    --policy.path="unitree_lerobot/lerobot/outputs/train/<run>/checkpoints/<step>/pretrained_model" `
+    --policy.path="$POLICY_PATH" `
     --repo_id=$DATASET_REPO_ID `
-    --root="$DATASET_ROOT" `
+    --root="$DATASET_DIR" `
     --episodes=0 `
     --frequency=30 `
     --arm="G1_29" `
@@ -371,39 +197,103 @@ python unitree_lerobot/eval_robot/eval_g1_dataset.py `
     --send_real_robot=false
 ```
 
-Why:
+### 3. `.gitignore`
 
-- Evaluation should point to the same dataset identity used during training.
-- Keeping `--repo_id` and `--root` aligned prevents accidental evaluation against the old Hugging Face dataset.
+Purpose:
 
-#### Section 5: Replay Datasets On Robot
+- Keep generated and local-heavy files out of GitHub.
 
-What was added:
+Current relevant behavior:
 
-```powershell
-python unitree_lerobot/eval_robot/replay_robot.py `
-    --repo_id=$DATASET_REPO_ID `
-    --root="$DATASET_ROOT" `
-    --episodes=0 `
-    --frequency=30 `
-    --arm="G1_29" `
-    --ee="dex3" `
-    --visualization=true
+```text
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+unitree_sdk2_python/
+/data/
+/datasets/
+*.mp4
+*.h5
+*.parquet
+/outputs/
+/wandb/
+/checkpoints/
+*.pt
+*.pth
+*.exe
+figure.png
+```
+
+Change made in the latest pass:
+
+```text
+*.exe
 ```
 
 Why:
 
-- Replay now uses the same dataset variables as load/train/eval.
+- Local Windows installers such as Anaconda/Miniforge should not be pushed to GitHub.
+- Dataset folders, generated videos, checkpoints, and train outputs are intentionally excluded because they are large and machine-specific.
 
-### 2. `unitree_lerobot/utils/constants.py`
+Effect:
+
+- The GitHub repo stays small and reproducible.
+- Teammates regenerate data/checkpoints using README instead of pulling local artifacts from git.
+
+### 4. `report_codex.md`
+
+Purpose:
+
+- Record the modifications, decisions, failure modes, and final commands.
+- Serve as a change log between the original repo workflow and the HeadcamOnly workflow.
+
+Change:
+
+- Rewritten into this structured report.
+- Removed stale wording that said only docs changed.
+- Added the actual eval fix, checkpoint behavior, and fresh-clone pipeline.
+
+## Files checked but not changed in the latest pass
+
+### `unitree_lerobot/utils/create_headcam_only_dataset.py`
 
 Status:
 
-- This file had already been edited before this report update.
-- I did not rewrite it in this pass.
-- I verified the new robot type can be imported and matches the headcam-only dataset.
+- Kept.
+- Required by the fresh-clone workflow.
 
-Relevant config:
+Role:
+
+- Copies the original LeRobot dataset tree.
+- Removes other image streams from metadata.
+- Rewrites:
+
+```text
+meta/info.json
+meta/stats.json
+meta/episodes/*.parquet
+videos/observation.images.head_cam/
+```
+
+Main transformation:
+
+```text
+observation.images.cam_left_high -> observation.images.head_cam
+```
+
+Why keep it:
+
+- The GitHub repo does not contain dataset files.
+- A teammate must be able to download the source Hugging Face dataset and regenerate `G1_Dex3_PickApple_Dataset_HeadcamOnly`.
+
+### `unitree_lerobot/utils/constants.py`
+
+Status:
+
+- Checked as part of the workflow.
+- Not changed in the latest pass.
+
+Required config:
 
 ```python
 "Unitree_G1_Dex3_HeadcamOnly": G1_DEX3_HEADCAM_ONLY_CONFIG
@@ -417,143 +307,336 @@ camera_to_image_key = {'color_0': 'head_cam'}
 motor count = 28
 ```
 
-Why this matters:
+Why it matters:
 
-- Conversion from raw JSON uses `ROBOT_CONFIGS[robot_type]`.
-- Training from an already-converted LeRobot dataset mainly depends on dataset metadata, but future conversions need this robot type to generate the same camera key.
+- If converting future raw Unitree JSON data, this robot type should generate the same camera naming convention as the current dataset.
+- For the already-generated LeRobot dataset, training mainly uses `meta/info.json`, but this config keeps future conversions consistent.
 
-### 3. `report_codex.md`
+## Files intentionally removed or not kept
 
-Purpose:
-
-- Explain what changed and why.
-- Record the final workflow decision.
-- Record verification results and current environment blockers.
-
-## Files intentionally not kept
-
-These files were created in an earlier approach and then removed:
+These temporary files are not present now:
 
 ```text
 train_headcamonly_act.ps1
-unitree_lerobot/utils/validate_headcamonly_dataset.py
+validate_headcamonly_dataset.py
 ```
 
 Reason:
 
-- They created a second workflow outside the README.
-- The user explicitly wanted to follow the repo README and minimize extra files.
-- The final approach uses existing repo scripts directly.
-
-## File not modified
+- They created a second workflow outside README.
+- The final approach uses the existing LeRobot scripts directly:
 
 ```text
-unitree_lerobot/utils/create_headcam_only_dataset.py
+lerobot/src/lerobot/scripts/lerobot_train.py
+unitree_lerobot/eval_robot/eval_g1_dataset.py
+unitree_lerobot/eval_robot/replay_robot.py
 ```
 
-Status:
-
-- I did not modify or delete it.
-- It is required for the fresh-clone workflow that regenerates the HeadcamOnly dataset from the original multi-camera dataset.
-- It is tracked by git in the current repository state.
-
-## Verification performed
-
-### Dataset metadata check
-
-Checked with Python stdlib, without depending on LeRobot training dependencies.
-
-Result:
+Also removed:
 
 ```text
+__pycache__/
+```
+
+Reason:
+
+- Python cache generated by imports/tests.
+- It is not source code and should not be committed.
+
+## Verified execution results
+
+### Dataset metadata
+
+The generated dataset was checked and matched the target contract:
+
+```text
+codebase_version: v3.0
 robot_type: Unitree_G1_Dex3_HeadcamOnly
 image keys: ['observation.images.head_cam']
-state/action shape: [28] [28]
+observation.state shape: [28]
+action shape: [28]
 ```
 
-### Robot config check
+Conclusion:
 
-Checked:
+```text
+The generated dataset is already in LeRobot v3.0 format.
+```
+
+### One-step smoke test
+
+Command type:
+
+```text
+5 episodes, 1 train step, no checkpoint
+```
+
+Expected success markers:
+
+```text
+Creating dataset
+Creating policy
+dataset.num_episodes=5
+Start offline training on a fixed dataset
+End of training
+```
+
+Purpose:
+
+- Validate dataset path.
+- Validate metadata shape.
+- Validate policy construction.
+- Avoid checkpoint/symlink issues during the first test.
+
+### 5-episode checkpoint test
+
+Command type:
+
+```text
+5 episodes, 200 steps, batch size 4, CUDA, checkpoint at final step
+```
+
+Observed success markers:
+
+```text
+policy.device='cuda'
+dataset.num_episodes=5
+step:200
+Checkpoint policy after step 200
+```
+
+Observed Windows-only issue:
+
+```text
+OSError: [WinError 1314] A required privilege is not held by the client
+```
+
+Interpretation:
+
+- Training reached step 200.
+- The real checkpoint folder was created before LeRobot tried to create `checkpoints/last`.
+- The error is caused by Windows symlink permissions, not by the dataset or model.
+
+Recommended handling:
+
+- On Ubuntu/Linux: train normally.
+- On Windows: enable Developer Mode for clean symlink creation, or use the real checkpoint path directly.
+
+## Standard commands to keep using
+
+Run from repository root unless the command changes directory.
+
+### 1. Environment
 
 ```powershell
-python -c "from unitree_lerobot.utils.constants import ROBOT_CONFIGS; c=ROBOT_CONFIGS['Unitree_G1_Dex3_HeadcamOnly']; print(c.cameras); print(c.camera_to_image_key); print(len(c.motors))"
+conda create -n unitree_lerobot -c conda-forge python=3.10 pinocchio ffmpeg -y
+conda activate unitree_lerobot
+
+cd unitree_lerobot/lerobot
+pip install -e .
+
+cd ../..
+pip install -e .
 ```
 
-Result:
-
-```text
-['head_cam']
-{'color_0': 'head_cam'}
-28
-```
-
-### README hard-code check
-
-Checked for local machine paths in README.
-
-Result:
-
-```text
-No hard-coded local drive path remains in README.
-```
-
-The README still contains placeholders such as:
-
-```text
-<path-to-raw-json-dataset>
-```
-
-That is intentional.
-
-## Current environment blocker
-
-The code path is prepared, but the current Python environment is missing LeRobot training dependencies.
-
-Observed missing packages:
-
-```text
-torchvision
-accelerate
-draccus
-safetensors
-einops
-diffusers
-```
-
-Earlier smoke test stopped at:
-
-```text
-ModuleNotFoundError: No module named 'accelerate'
-```
-
-After installing dependencies, the recommended first run is still the README smoke test:
+### 2. Shared variables
 
 ```powershell
+$PROJECT_ROOT = (Get-Location).Path
+$DATASET_PARENT = Join-Path (Split-Path $PROJECT_ROOT -Parent) "datasets"
+$DATASET_REPO_ID = "G1_Dex3_PickApple_Dataset_HeadcamOnly"
+$DATASET_DIR = Join-Path $DATASET_PARENT $DATASET_REPO_ID
+$SOURCE_DATASET_REPO_ID = "unitreerobotics/G1_Dex3_PickApple_Dataset"
+$SOURCE_DATASET_NAME = "G1_Dex3_PickApple_Dataset"
+$SOURCE_DATASET_DIR = Join-Path $DATASET_PARENT $SOURCE_DATASET_NAME
+
+New-Item -ItemType Directory -Force $DATASET_PARENT | Out-Null
+```
+
+### 3. Download and convert data
+
+```powershell
+python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id=r'$SOURCE_DATASET_REPO_ID', repo_type='dataset', local_dir=r'$SOURCE_DATASET_DIR')"
+
+python unitree_lerobot/utils/create_headcam_only_dataset.py `
+    --src-dir "$SOURCE_DATASET_DIR" `
+    --dst-dir "$DATASET_DIR" `
+    --source-video-key observation.images.cam_left_high `
+    --target-video-key observation.images.head_cam `
+    --overwrite
+```
+
+### 4. Verify metadata
+
+```powershell
+$INFO_PATH = Join-Path $DATASET_DIR "meta\info.json"
+$INFO = Get-Content $INFO_PATH -Raw | ConvertFrom-Json
+
+$INFO.codebase_version
+$INFO.robot_type
+$INFO.features.PSObject.Properties.Name | Where-Object { $_ -like "observation.images.*" }
+$INFO.features."observation.state".shape
+$INFO.features.action.shape
+```
+
+### 5. Train-test on 5 episodes
+
+```powershell
+cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
+
+$TRAIN_STEPS = 200
+
 python src/lerobot/scripts/lerobot_train.py `
     --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_ROOT" `
+    --dataset.root="$DATASET_DIR" `
+    --dataset.episodes=[0,1,2,3,4] `
     --policy.push_to_hub=false `
     --policy.type=act `
-    --steps=1 `
-    --batch_size=1 `
+    --policy.device=cuda `
+    --steps=$TRAIN_STEPS `
+    --batch_size=4 `
     --num_workers=0 `
-    --eval_freq=0 `
-    --save_checkpoint=false
+    --save_freq=$TRAIN_STEPS `
+    --eval_freq=0
 ```
 
-## Current git status context
+### 6. Full-data train
 
-Expected relevant status after this work:
+```powershell
+$TRAIN_STEPS = 100000
+
+python src/lerobot/scripts/lerobot_train.py `
+    --dataset.repo_id=$DATASET_REPO_ID `
+    --dataset.root="$DATASET_DIR" `
+    --policy.push_to_hub=false `
+    --policy.type=act `
+    --policy.device=cuda `
+    --steps=$TRAIN_STEPS `
+    --save_freq=$TRAIN_STEPS `
+    --eval_freq=0
+```
+
+Do not include this in full training:
+
+```text
+--dataset.episodes=[0,1,2,3,4]
+```
+
+### 7. Evaluate checkpoint
+
+```powershell
+cd $PROJECT_ROOT
+
+$POLICY_PATH = "unitree_lerobot/lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model"
+
+python unitree_lerobot/eval_robot/eval_g1_dataset.py `
+    --policy.path="$POLICY_PATH" `
+    --repo_id=$DATASET_REPO_ID `
+    --root="$DATASET_DIR" `
+    --episodes=0 `
+    --frequency=30 `
+    --arm="G1_29" `
+    --ee="dex3" `
+    --visualization=true `
+    --send_real_robot=false
+```
+
+## Ubuntu/Linux copy-run block
+
+Use this on the GPU Ubuntu machine from the repository root. It is the bash equivalent of the PowerShell workflow above.
+
+```bash
+PROJECT_ROOT="$(pwd)"
+DATASET_PARENT="$(dirname "$PROJECT_ROOT")/datasets"
+DATASET_REPO_ID="G1_Dex3_PickApple_Dataset_HeadcamOnly"
+DATASET_DIR="$DATASET_PARENT/$DATASET_REPO_ID"
+SOURCE_DATASET_REPO_ID="unitreerobotics/G1_Dex3_PickApple_Dataset"
+SOURCE_DATASET_NAME="G1_Dex3_PickApple_Dataset"
+SOURCE_DATASET_DIR="$DATASET_PARENT/$SOURCE_DATASET_NAME"
+
+mkdir -p "$DATASET_PARENT"
+
+export SOURCE_DATASET_REPO_ID SOURCE_DATASET_DIR
+python -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["SOURCE_DATASET_REPO_ID"], repo_type="dataset", local_dir=os.environ["SOURCE_DATASET_DIR"])'
+
+python unitree_lerobot/utils/create_headcam_only_dataset.py \
+    --src-dir "$SOURCE_DATASET_DIR" \
+    --dst-dir "$DATASET_DIR" \
+    --source-video-key observation.images.cam_left_high \
+    --target-video-key observation.images.head_cam \
+    --overwrite
+
+cd "$PROJECT_ROOT/unitree_lerobot/lerobot"
+
+TRAIN_STEPS=200
+python src/lerobot/scripts/lerobot_train.py \
+    --dataset.repo_id="$DATASET_REPO_ID" \
+    --dataset.root="$DATASET_DIR" \
+    --dataset.episodes=[0,1,2,3,4] \
+    --policy.push_to_hub=false \
+    --policy.type=act \
+    --policy.device=cuda \
+    --steps="$TRAIN_STEPS" \
+    --batch_size=4 \
+    --num_workers=0 \
+    --save_freq="$TRAIN_STEPS" \
+    --eval_freq=0
+
+TRAIN_STEPS=100000
+python src/lerobot/scripts/lerobot_train.py \
+    --dataset.repo_id="$DATASET_REPO_ID" \
+    --dataset.root="$DATASET_DIR" \
+    --policy.push_to_hub=false \
+    --policy.type=act \
+    --policy.device=cuda \
+    --steps="$TRAIN_STEPS" \
+    --save_freq="$TRAIN_STEPS" \
+    --eval_freq=0
+```
+
+Evaluation after Linux training:
+
+```bash
+cd "$PROJECT_ROOT"
+POLICY_PATH="unitree_lerobot/lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model"
+
+python unitree_lerobot/eval_robot/eval_g1_dataset.py \
+    --policy.path="$POLICY_PATH" \
+    --repo_id="$DATASET_REPO_ID" \
+    --root="$DATASET_DIR" \
+    --episodes=0 \
+    --frequency=30 \
+    --arm="G1_29" \
+    --ee="dex3" \
+    --visualization=true \
+    --send_real_robot=false
+```
+
+## Current git status expectation
+
+Expected relevant modified files before commit:
 
 ```text
 M .gitignore
 M README.md
 M report_codex.md
+M unitree_lerobot/eval_robot/eval_g1_dataset.py
 ```
 
-Notes:
+Recommended commit scope:
 
-- `.gitignore`: modified in the current working tree outside the README/report changes; keep it if you want datasets, videos, and training outputs excluded from GitHub.
-- `README.md`: updated by Codex to document the portable workflow.
-- `report_codex.md`: updated by Codex.
-- `unitree_lerobot/utils/create_headcam_only_dataset.py`: tracked utility required by the fresh-clone data regeneration flow.
+```powershell
+git add .gitignore README.md report_codex.md unitree_lerobot/eval_robot/eval_g1_dataset.py
+git commit -m "Document and fix G1 Dex3 HeadcamOnly training workflow"
+```
+
+Do not commit:
+
+```text
+datasets/
+outputs/
+checkpoints/
+videos/
+__pycache__/
+*.exe
+```

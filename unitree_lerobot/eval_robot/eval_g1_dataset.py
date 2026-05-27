@@ -183,7 +183,7 @@ def eval_main(cfg: EvalRealConfig):
 
     logging.info("Making policy.")
 
-    dataset = LeRobotDataset(repo_id=cfg.repo_id)
+    dataset = LeRobotDataset(repo_id=cfg.repo_id, root=cfg.root)
 
     policy = make_policy(cfg=cfg.policy, ds_meta=dataset.meta)
     policy.eval()

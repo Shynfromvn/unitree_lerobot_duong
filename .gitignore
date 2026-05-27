@@ -28,6 +28,9 @@ env/
 # Local SDK checkout
 unitree_sdk2_python/
 
+# Local installers
+*.exe
+
 # Local datasets and generated robot data
 /data/
 /datasets/

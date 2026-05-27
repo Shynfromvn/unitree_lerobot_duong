@@ -62,17 +62,21 @@ git clone --recurse-submodules https://github.com/unitreerobotics/unitree_lerobo
 git submodule update --init --recursive
 
 # Create a conda environment
-conda create -y -n unitree_lerobot python=3.10
+conda create -n unitree_lerobot -c conda-forge python=3.10 pinocchio ffmpeg -y
 conda activate unitree_lerobot
-conda install pinocchio -c conda-forge
-
-conda install ffmpeg=7.1.1 -c conda-forge
 
 # Install LeRobot
 cd unitree_lerobot/lerobot && pip install -e .
 
 # Install unitree_lerobot
 cd ../../ && pip install -e .
+
+# Optional: verify CUDA after install
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda)"
+
+# Optional: install a CUDA build if torch.cuda.is_available() is False.
+# Keep torchvision >=0.21 and <0.23 for this LeRobot version.
+pip install --upgrade torch==2.6.0+cu121 torchvision==0.21.0+cu121 torchaudio==2.6.0+cu121 --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ## 1.2 🕹️ unitree_sdk2_python
@@ -82,6 +86,218 @@ For `DDS communication` on Unitree robots, some dependencies need to be installe
 ```bash
 git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
 cd unitree_sdk2_python  && pip install -e .
+```
+
+## 1.3 ✅ G1 Dex3 HeadcamOnly Copy-Run Pipeline
+
+Use this block when cloning the repo on a new machine and training the local HeadcamOnly dataset. Run it from the repository root after Section 1.1 has installed the environment.
+
+### Step 1: Define paths once
+
+The default layout is:
+
+```text
+parent-folder/
+  datasets/
+    G1_Dex3_PickApple_Dataset/
+    G1_Dex3_PickApple_Dataset_HeadcamOnly/
+  unitree_lerobot/
+```
+
+```powershell
+$PROJECT_ROOT = (Get-Location).Path
+$DATASET_PARENT = Join-Path (Split-Path $PROJECT_ROOT -Parent) "datasets"
+$DATASET_REPO_ID = "G1_Dex3_PickApple_Dataset_HeadcamOnly"
+$DATASET_DIR = Join-Path $DATASET_PARENT $DATASET_REPO_ID
+$SOURCE_DATASET_REPO_ID = "unitreerobotics/G1_Dex3_PickApple_Dataset"
+$SOURCE_DATASET_NAME = "G1_Dex3_PickApple_Dataset"
+$SOURCE_DATASET_DIR = Join-Path $DATASET_PARENT $SOURCE_DATASET_NAME
+
+New-Item -ItemType Directory -Force $DATASET_PARENT | Out-Null
+```
+
+If your datasets are stored elsewhere, change only `$DATASET_PARENT`, then recompute `$DATASET_DIR` and `$SOURCE_DATASET_DIR`.
+
+### Step 2: Download original dataset and generate HeadcamOnly
+
+Run `huggingface-cli login` first if Hugging Face requires authentication.
+
+```powershell
+python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id=r'$SOURCE_DATASET_REPO_ID', repo_type='dataset', local_dir=r'$SOURCE_DATASET_DIR')"
+
+python unitree_lerobot/utils/create_headcam_only_dataset.py `
+    --src-dir "$SOURCE_DATASET_DIR" `
+    --dst-dir "$DATASET_DIR" `
+    --source-video-key observation.images.cam_left_high `
+    --target-video-key observation.images.head_cam `
+    --overwrite
+```
+
+This converts the original multi-camera dataset into one camera stream:
+
+```text
+observation.images.cam_left_high -> observation.images.head_cam
+```
+
+### Step 3: Verify dataset metadata
+
+```powershell
+$INFO_PATH = Join-Path $DATASET_DIR "meta\info.json"
+$INFO = Get-Content $INFO_PATH -Raw | ConvertFrom-Json
+
+$INFO.codebase_version
+$INFO.robot_type
+$INFO.features.PSObject.Properties.Name | Where-Object { $_ -like "observation.images.*" }
+$INFO.features."observation.state".shape
+$INFO.features.action.shape
+```
+
+Expected result:
+
+```text
+v3.0
+Unitree_G1_Dex3_HeadcamOnly
+observation.images.head_cam
+28
+28
+```
+
+### Step 4: Train-test on 5 episodes
+
+This checks dataset loading, policy creation, CUDA selection, and checkpoint writing before full training.
+
+```powershell
+cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
+
+$TRAIN_STEPS = 200
+
+python src/lerobot/scripts/lerobot_train.py `
+    --dataset.repo_id=$DATASET_REPO_ID `
+    --dataset.root="$DATASET_DIR" `
+    --dataset.episodes=[0,1,2,3,4] `
+    --policy.push_to_hub=false `
+    --policy.type=act `
+    --policy.device=cuda `
+    --steps=$TRAIN_STEPS `
+    --batch_size=4 `
+    --num_workers=0 `
+    --save_freq=$TRAIN_STEPS `
+    --eval_freq=0
+```
+
+Expected markers:
+
+```text
+dataset.num_episodes=5
+policy.device='cuda'
+step:200
+Checkpoint policy after step 200
+```
+
+On Windows, the final symlink `checkpoints/last` can fail with `WinError 1314` if Developer Mode is off. The real model is still the step checkpoint:
+
+```text
+unitree_lerobot/lerobot/outputs/train/<date>/<run>_act/checkpoints/000200/pretrained_model
+```
+
+On Ubuntu/Linux this symlink issue is normally not present.
+
+### Step 5: Train full dataset
+
+Run this after the 5-episode test is valid. Do not pass `--dataset.episodes`; that is what makes LeRobot use the full dataset.
+
+```powershell
+$TRAIN_STEPS = 100000
+
+python src/lerobot/scripts/lerobot_train.py `
+    --dataset.repo_id=$DATASET_REPO_ID `
+    --dataset.root="$DATASET_DIR" `
+    --policy.push_to_hub=false `
+    --policy.type=act `
+    --policy.device=cuda `
+    --steps=$TRAIN_STEPS `
+    --save_freq=$TRAIN_STEPS `
+    --eval_freq=0
+```
+
+The model to reuse is:
+
+```text
+unitree_lerobot/lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model
+```
+
+### Step 6: Evaluate saved model on dataset
+
+Replace `<date>`, `<run>`, and `<step>` with the real folder produced by training.
+
+```powershell
+cd $PROJECT_ROOT
+
+$POLICY_PATH = "unitree_lerobot/lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model"
+
+python unitree_lerobot/eval_robot/eval_g1_dataset.py `
+    --policy.path="$POLICY_PATH" `
+    --repo_id=$DATASET_REPO_ID `
+    --root="$DATASET_DIR" `
+    --episodes=0 `
+    --frequency=30 `
+    --arm="G1_29" `
+    --ee="dex3" `
+    --visualization=true `
+    --send_real_robot=false
+```
+
+### Ubuntu/Linux bash equivalent
+
+Use this block on an Ubuntu training machine from the repository root. It follows the same path contract as the PowerShell workflow above.
+
+```bash
+PROJECT_ROOT="$(pwd)"
+DATASET_PARENT="$(dirname "$PROJECT_ROOT")/datasets"
+DATASET_REPO_ID="G1_Dex3_PickApple_Dataset_HeadcamOnly"
+DATASET_DIR="$DATASET_PARENT/$DATASET_REPO_ID"
+SOURCE_DATASET_REPO_ID="unitreerobotics/G1_Dex3_PickApple_Dataset"
+SOURCE_DATASET_NAME="G1_Dex3_PickApple_Dataset"
+SOURCE_DATASET_DIR="$DATASET_PARENT/$SOURCE_DATASET_NAME"
+
+mkdir -p "$DATASET_PARENT"
+
+export SOURCE_DATASET_REPO_ID SOURCE_DATASET_DIR
+python -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["SOURCE_DATASET_REPO_ID"], repo_type="dataset", local_dir=os.environ["SOURCE_DATASET_DIR"])'
+
+python unitree_lerobot/utils/create_headcam_only_dataset.py \
+    --src-dir "$SOURCE_DATASET_DIR" \
+    --dst-dir "$DATASET_DIR" \
+    --source-video-key observation.images.cam_left_high \
+    --target-video-key observation.images.head_cam \
+    --overwrite
+
+cd "$PROJECT_ROOT/unitree_lerobot/lerobot"
+
+TRAIN_STEPS=200
+python src/lerobot/scripts/lerobot_train.py \
+    --dataset.repo_id="$DATASET_REPO_ID" \
+    --dataset.root="$DATASET_DIR" \
+    --dataset.episodes=[0,1,2,3,4] \
+    --policy.push_to_hub=false \
+    --policy.type=act \
+    --policy.device=cuda \
+    --steps="$TRAIN_STEPS" \
+    --batch_size=4 \
+    --num_workers=0 \
+    --save_freq="$TRAIN_STEPS" \
+    --eval_freq=0
+
+TRAIN_STEPS=100000
+python src/lerobot/scripts/lerobot_train.py \
+    --dataset.repo_id="$DATASET_REPO_ID" \
+    --dataset.root="$DATASET_DIR" \
+    --policy.push_to_hub=false \
+    --policy.type=act \
+    --policy.device=cuda \
+    --steps="$TRAIN_STEPS" \
+    --save_freq="$TRAIN_STEPS" \
+    --eval_freq=0
 ```
 
 # 2. ⚙️ Data Collection and Conversion
@@ -106,17 +322,18 @@ for step_idx in tqdm.tqdm(range(from_idx, to_idx)):
 ```
 
 For the local G1 Dex3 headcam-only dataset in this workspace, keep one shared dataset identity and reuse it in load, train, eval, and replay commands.
-Run these commands from the repository root. The default assumes `datasets/` is next to this repository; if your dataset is elsewhere, override only `$DATASET_ROOT`.
+Run these commands from the repository root. The default assumes `datasets/` is next to this repository; if your dataset is elsewhere, override only `$DATASET_PARENT`.
 
 ```powershell
 $PROJECT_ROOT = (Get-Location).Path
-$DATASET_ROOT = Join-Path (Split-Path $PROJECT_ROOT -Parent) "datasets"
+$DATASET_PARENT = Join-Path (Split-Path $PROJECT_ROOT -Parent) "datasets"
 $DATASET_REPO_ID = "G1_Dex3_PickApple_Dataset_HeadcamOnly"
+$DATASET_DIR = Join-Path $DATASET_PARENT $DATASET_REPO_ID
 $SOURCE_DATASET_REPO_ID = "unitreerobotics/G1_Dex3_PickApple_Dataset"
 $SOURCE_DATASET_NAME = "G1_Dex3_PickApple_Dataset"
 $ROBOT_TYPE = "Unitree_G1_Dex3_HeadcamOnly"
 
-New-Item -ItemType Directory -Force $DATASET_ROOT | Out-Null
+New-Item -ItemType Directory -Force $DATASET_PARENT | Out-Null
 ```
 
 ```python
@@ -124,11 +341,12 @@ from pathlib import Path
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 project_root = Path.cwd()
-dataset_root = (project_root / ".." / "datasets").resolve()
+dataset_parent = (project_root / ".." / "datasets").resolve()
+dataset_dir = dataset_parent / "G1_Dex3_PickApple_Dataset_HeadcamOnly"
 
 dataset = LeRobotDataset(
     repo_id="G1_Dex3_PickApple_Dataset_HeadcamOnly",
-    root=dataset_root,
+    root=dataset_dir,
 )
 
 print(dataset.meta.robot_type)
@@ -162,7 +380,7 @@ cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
 
 python src/lerobot/scripts/lerobot_dataset_viz.py `
     --repo-id "$DATASET_REPO_ID" `
-    --root "$DATASET_ROOT" `
+    --root "$DATASET_DIR" `
     --episode-index 0
 ```
 
@@ -267,8 +485,8 @@ observation.images.head_cam
 If the repository was cloned without local data, first download the original multi-camera dataset, then generate the headcam-only dataset:
 
 ```powershell
-$SOURCE_DATASET_DIR = Join-Path $DATASET_ROOT $SOURCE_DATASET_NAME
-$TARGET_DATASET_DIR = Join-Path $DATASET_ROOT $DATASET_REPO_ID
+$SOURCE_DATASET_DIR = Join-Path $DATASET_PARENT $SOURCE_DATASET_NAME
+$TARGET_DATASET_DIR = $DATASET_DIR
 
 # Run this first if the source dataset is private:
 # huggingface-cli login
@@ -305,18 +523,19 @@ cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
 
 python src/lerobot/scripts/lerobot_train.py `
     --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_ROOT" `
+    --dataset.root="$DATASET_DIR" `
     --policy.push_to_hub=false `
     --policy.type=act `
     --eval_freq=0
 ```
 
-Before a long run, use a one-step smoke test:
+Before a long run, use a one-step smoke test on 5 episodes:
 
 ```powershell
 python src/lerobot/scripts/lerobot_train.py `
     --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_ROOT" `
+    --dataset.root="$DATASET_DIR" `
+    --dataset.episodes=[0,1,2,3,4] `
     --policy.push_to_hub=false `
     --policy.type=act `
     --steps=1 `
@@ -325,6 +544,37 @@ python src/lerobot/scripts/lerobot_train.py `
     --eval_freq=0 `
     --save_checkpoint=false
 ```
+
+If the smoke test succeeds, train on the full dataset by removing `--dataset.episodes`:
+
+```powershell
+$TRAIN_STEPS = 100000
+
+python src/lerobot/scripts/lerobot_train.py `
+    --dataset.repo_id=$DATASET_REPO_ID `
+    --dataset.root="$DATASET_DIR" `
+    --policy.push_to_hub=false `
+    --policy.type=act `
+    --steps=$TRAIN_STEPS `
+    --save_freq=$TRAIN_STEPS `
+    --eval_freq=0
+```
+
+Checkpoints are saved under:
+
+```text
+unitree_lerobot/lerobot/outputs/train/<date>/<run>_<policy>/checkpoints/<step>/pretrained_model
+```
+
+Use the real checkpoint path for evaluation and deployment. The `checkpoints/last` entry is only a convenience symlink created by LeRobot.
+
+On Windows, creating `checkpoints/last` may fail in a normal VS Code terminal with `WinError 1314`. For a clean full training run on Windows, enable Developer Mode before training:
+
+```text
+Windows Settings -> Privacy & security -> For developers -> Developer Mode -> On
+```
+
+If Developer Mode is not enabled, keep `--save_freq=$TRAIN_STEPS` so LeRobot saves only at the final step. The real checkpoint folder is written before the symlink step, so the final model can still be used even if the process exits with the symlink error after saving.
 
 - `Train Act Policy` [Please refer to it in detail](https://github.com/huggingface/lerobot/blob/main/docs/source/act.mdx)
 
@@ -457,10 +707,12 @@ python unitree_lerobot/eval_robot/eval_g1_dataset.py  \
 For the local headcam-only dataset, keep `--repo_id` and `--root` consistent with the training command:
 
 ```powershell
+$POLICY_PATH = "unitree_lerobot/lerobot/outputs/train/<date>/<run>_<policy>/checkpoints/<step>/pretrained_model"
+
 python unitree_lerobot/eval_robot/eval_g1_dataset.py `
-    --policy.path="unitree_lerobot/lerobot/outputs/train/<run>/checkpoints/<step>/pretrained_model" `
+    --policy.path="$POLICY_PATH" `
     --repo_id=$DATASET_REPO_ID `
-    --root="$DATASET_ROOT" `
+    --root="$DATASET_DIR" `
     --episodes=0 `
     --frequency=30 `
     --arm="G1_29" `
@@ -501,7 +753,7 @@ For the local headcam-only dataset:
 ```powershell
 python unitree_lerobot/eval_robot/replay_robot.py `
     --repo_id=$DATASET_REPO_ID `
-    --root="$DATASET_ROOT" `
+    --root="$DATASET_DIR" `
     --episodes=0 `
     --frequency=30 `
     --arm="G1_29" `
