@@ -1,12 +1,63 @@
-.vscode
-.ruff_cache
+# Python caches/build outputs
 __pycache__/
-figure.png
-unitree_sdk2_python/
-unitree_lerobot.egg-info
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
 
+# Virtual environments and local config
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local SDK checkout
+unitree_sdk2_python/
+
+# Local datasets and generated robot data
+/data/
+/datasets/
+*.bag
+*.h5
+*.hdf5
+*.parquet
+*.npy
+*.npz
+
+# Heavy media captures
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# Training/evaluation outputs
+/logs/
+/runs/
+/outputs/
+/wandb/
+/checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.onnx
+
+# Local camera/debug captures
+figure.png
 cam_high.jpg
 cam_right_wrist.jpg
 cam_left_wrist.jpg
-data/
-./data

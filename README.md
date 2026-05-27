@@ -110,9 +110,13 @@ Run these commands from the repository root. The default assumes `datasets/` is 
 
 ```powershell
 $PROJECT_ROOT = (Get-Location).Path
-$DATASET_ROOT = (Resolve-Path (Join-Path $PROJECT_ROOT "..\datasets")).Path
+$DATASET_ROOT = Join-Path (Split-Path $PROJECT_ROOT -Parent) "datasets"
 $DATASET_REPO_ID = "G1_Dex3_PickApple_Dataset_HeadcamOnly"
+$SOURCE_DATASET_REPO_ID = "unitreerobotics/G1_Dex3_PickApple_Dataset"
+$SOURCE_DATASET_NAME = "G1_Dex3_PickApple_Dataset"
 $ROBOT_TYPE = "Unitree_G1_Dex3_HeadcamOnly"
+
+New-Item -ItemType Directory -Force $DATASET_ROOT | Out-Null
 ```
 
 ```python
@@ -259,6 +263,33 @@ This keeps the generated image feature aligned with the training dataset key:
 ```text
 observation.images.head_cam
 ```
+
+If the repository was cloned without local data, first download the original multi-camera dataset, then generate the headcam-only dataset:
+
+```powershell
+$SOURCE_DATASET_DIR = Join-Path $DATASET_ROOT $SOURCE_DATASET_NAME
+$TARGET_DATASET_DIR = Join-Path $DATASET_ROOT $DATASET_REPO_ID
+
+# Run this first if the source dataset is private:
+# huggingface-cli login
+
+python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id=r'$SOURCE_DATASET_REPO_ID', repo_type='dataset', local_dir=r'$SOURCE_DATASET_DIR')"
+
+python unitree_lerobot/utils/create_headcam_only_dataset.py `
+    --src-dir "$SOURCE_DATASET_DIR" `
+    --dst-dir "$TARGET_DATASET_DIR" `
+    --source-video-key observation.images.cam_left_high `
+    --target-video-key observation.images.head_cam `
+    --overwrite
+```
+
+`$SOURCE_DATASET_REPO_ID` points to the original G1 Dex3 PickApple dataset on Hugging Face. The conversion copies:
+
+```text
+observation.images.cam_left_high -> observation.images.head_cam
+```
+
+Make sure `unitree_lerobot/utils/create_headcam_only_dataset.py` is committed with the GitHub repo; a fresh clone needs this script to regenerate the local training dataset.
 
 **Node:** `Unitree_G1_Dex1_Sim` is a robot type used for data collection in unitree_sim_isaaclab
 , with the head equipped with a single-viewpoint camera.
