@@ -105,6 +105,42 @@ for step_idx in tqdm.tqdm(range(from_idx, to_idx)):
     step = dataset[step_idx]
 ```
 
+For the local G1 Dex3 headcam-only dataset in this workspace, keep one shared dataset identity and reuse it in load, train, eval, and replay commands.
+Run these commands from the repository root. The default assumes `datasets/` is next to this repository; if your dataset is elsewhere, override only `$DATASET_ROOT`.
+
+```powershell
+$PROJECT_ROOT = (Get-Location).Path
+$DATASET_ROOT = (Resolve-Path (Join-Path $PROJECT_ROOT "..\datasets")).Path
+$DATASET_REPO_ID = "G1_Dex3_PickApple_Dataset_HeadcamOnly"
+$ROBOT_TYPE = "Unitree_G1_Dex3_HeadcamOnly"
+```
+
+```python
+from pathlib import Path
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+project_root = Path.cwd()
+dataset_root = (project_root / ".." / "datasets").resolve()
+
+dataset = LeRobotDataset(
+    repo_id="G1_Dex3_PickApple_Dataset_HeadcamOnly",
+    root=dataset_root,
+)
+
+print(dataset.meta.robot_type)
+print(dataset.meta.camera_keys)
+print(dataset.num_episodes, dataset.num_frames)
+```
+
+Expected metadata:
+
+```text
+robot_type: Unitree_G1_Dex3_HeadcamOnly
+camera key: observation.images.head_cam
+state/action dim: 28
+fps: 30
+```
+
 `visualization`
 
 ```bash
@@ -112,6 +148,17 @@ cd unitree_lerobot/lerobot
 
 python src/lerobot/scripts/lerobot_dataset_viz.py \
     --repo-id unitreerobotics/G1_Dex3_ToastedBread_Dataset \
+    --episode-index 0
+```
+
+For the local headcam-only dataset:
+
+```powershell
+cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
+
+python src/lerobot/scripts/lerobot_dataset_viz.py `
+    --repo-id "$DATASET_REPO_ID" `
+    --root "$DATASET_ROOT" `
     --episode-index 0
 ```
 
@@ -196,12 +243,57 @@ python unitree_lerobot/utils/convert_unitree_json_to_lerobot.py \
     --push_to_hub
 ```
 
+For raw JSON data that should become a G1 Dex3 headcam-only dataset, use the dedicated robot type from `unitree_lerobot/utils/constants.py`:
+
+```powershell
+$RAW_DATA_ROOT = "<path-to-raw-json-dataset>"
+
+python unitree_lerobot/utils/convert_unitree_json_to_lerobot.py `
+    --raw-dir "$RAW_DATA_ROOT" `
+    --repo-id "$DATASET_REPO_ID" `
+    --robot_type "$ROBOT_TYPE"
+```
+
+This keeps the generated image feature aligned with the training dataset key:
+
+```text
+observation.images.head_cam
+```
+
 **Node:** `Unitree_G1_Dex1_Sim` is a robot type used for data collection in unitree_sim_isaaclab
 , with the head equipped with a single-viewpoint camera.
 
 # 3. 🚀 Training
 
 [For training, please refer to the official LeRobot training example and parameters for further guidance.](https://github.com/huggingface/lerobot/tree/main/docs/source)
+
+For the local headcam-only dataset, use the same variables from Section 2.1 and call the original LeRobot train entrypoint directly. This avoids maintaining a second training script.
+
+```powershell
+cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
+
+python src/lerobot/scripts/lerobot_train.py `
+    --dataset.repo_id=$DATASET_REPO_ID `
+    --dataset.root="$DATASET_ROOT" `
+    --policy.push_to_hub=false `
+    --policy.type=act `
+    --eval_freq=0
+```
+
+Before a long run, use a one-step smoke test:
+
+```powershell
+python src/lerobot/scripts/lerobot_train.py `
+    --dataset.repo_id=$DATASET_REPO_ID `
+    --dataset.root="$DATASET_ROOT" `
+    --policy.push_to_hub=false `
+    --policy.type=act `
+    --steps=1 `
+    --batch_size=1 `
+    --num_workers=0 `
+    --eval_freq=0 `
+    --save_checkpoint=false
+```
 
 - `Train Act Policy` [Please refer to it in detail](https://github.com/huggingface/lerobot/blob/main/docs/source/act.mdx)
 
@@ -331,6 +423,21 @@ python unitree_lerobot/eval_robot/eval_g1_dataset.py  \
     --send_real_robot=false
 ```
 
+For the local headcam-only dataset, keep `--repo_id` and `--root` consistent with the training command:
+
+```powershell
+python unitree_lerobot/eval_robot/eval_g1_dataset.py `
+    --policy.path="unitree_lerobot/lerobot/outputs/train/<run>/checkpoints/<step>/pretrained_model" `
+    --repo_id=$DATASET_REPO_ID `
+    --root="$DATASET_ROOT" `
+    --episodes=0 `
+    --frequency=30 `
+    --arm="G1_29" `
+    --ee="dex3" `
+    --visualization=true `
+    --send_real_robot=false
+```
+
 **Note:** If you are using the `unitree_sim_isaaclab` simulation environment, please refer to [unitree_sim_isaaclab](https://github.com/unitreerobotics/unitree_sim_isaaclab) for environment setup and usage instructions.
 
 # 5. 🎬 Replay Datasets On Robot
@@ -355,6 +462,19 @@ python unitree_lerobot/eval_robot/replay_robot.py \
     --frequency=30 \
     --arm="G1_29" \
     --ee="dex3" \
+    --visualization=true
+```
+
+For the local headcam-only dataset:
+
+```powershell
+python unitree_lerobot/eval_robot/replay_robot.py `
+    --repo_id=$DATASET_REPO_ID `
+    --root="$DATASET_ROOT" `
+    --episodes=0 `
+    --frequency=30 `
+    --arm="G1_29" `
+    --ee="dex3" `
     --visualization=true
 ```
 

@@ -176,6 +176,19 @@ G1_DEX3_CONFIG = RobotConfig(
 )
 
 
+#================Config for only using head camera========================
+G1_DEX3_HEADCAM_ONLY_CONFIG = dataclasses.replace(
+    G1_DEX3_CONFIG,
+    cameras=[
+        "head_cam"
+    ],
+    camera_to_image_key={
+        "color_0": "head_cam",
+    },
+
+)
+#==========================================================================
+
 G1_BRAINCO_CONFIG = RobotConfig(
     motors=[
         "kLeftShoulderPitch",
@@ -500,4 +513,8 @@ ROBOT_CONFIGS = {
     "Unitree_G1_Lift_Dex1_UseWaist": LIFT_G1_DEX1_USEWAIST_CONFIG,
     "Unitree_G1_Lift_Dex1_NoUseWaist": LIFT_G1_DEX1_NOUSEWAIST_CONFIG,
     "Unitree_Arm_L1": UNIARML1_CONFIG,
+
+    #================Config for only using head camera========================
+    "Unitree_G1_Dex3_HeadcamOnly": G1_DEX3_HEADCAM_ONLY_CONFIG,
+    #==========================================================================
 }
