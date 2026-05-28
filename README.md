@@ -1,257 +1,182 @@
-<div align="center">
-  <h1 align="center"> unitree_lerobot </h1>
-  <h3 align="center"> Unitree Robotics </h3>
-  <p align="center">
-    <a href="./README.md"> English </a> | <a href="./docs/README_zh.md">中文</a>
-  </p>
-    <p align="center">
-     <a href="https://discord.gg/ZwcVwxv5rq" target="_blank"><img src="https://img.shields.io/badge/-Discord-5865F2?style=flat&logo=Discord&logoColor=white" alt="Unitree LOGO"></a>
-  </p>
-</div>
+# unitree_lerobot_duong
 
-| Unitree Robotics repositories                      | link                                                                               |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Unitree Datasets                                   | [unitree datasets](https://huggingface.co/unitreerobotics)                         |
-| AVP Teleoperate                                    | [avp_teleoperate](https://github.com/unitreerobotics/avp_teleoperate)              |
-| Unitree Sim IsaacLab                               | [unitree_sim_isaaclab](https://github.com/unitreerobotics/unitree_sim_isaaclab)    |
-| Conversion of various versions of lerobot datasets | [any4lerobot](https://github.com/Tavish9/any4lerobot/tree/main/ds_version_convert) |
+Linux-first workflow for training and evaluating a Unitree G1 Dex3 HeadcamOnly ACT policy with LeRobot.
 
-# 🔖 Release Note
-
-### 🏷️ v0.3
-
-1.Update [`lerobot dataset v3.0`](https://github.com/huggingface/lerobot/blob/main/docs/source/porting_datasets_v3.mdx).
-
-2.More policy support([`pi05`](https://github.com/huggingface/lerobot/tree/main/src/lerobot/policies/pi05), [`groot`](https://github.com/huggingface/lerobot/tree/main/src/lerobot/policies/groot)).
-
-### 🏷️ v0.2
-
-1.Add `data conversion` and `model deployment` for `brainco` and `inspire1` Dexterous hands.
-
-2.Add the functionality of `replaying the robot dataset`.
-
-3.Add `simulation environment verification` [unitree_sim_isaaclab].
-
-### 🏷️ v0.1
-
-Support `data conversion`, `model deployment`, and `real-world testing` for `G1 + Dex1 + Dex3`.
-
-# 0. 📖 Introduction
-
-This repository is used for `lerobot training validation`(Supports LeRobot datasets version 2.0 and above.) and `unitree data conversion`.
-
-`❗Tips： If you have any questions, ideas or suggestions that you want to realize, please feel free to raise them at any time. We will do our best to solve and implement them.`
-
-| Directory  | Description                                                                                              |
-| ---------- | -------------------------------------------------------------------------------------------------------- |
-| lerobot    | The code in the `lerobot repository` for training; its corresponding commit version number is `0878c68`. |
-| utils      | `unitree data processing tool `                                                                          |
-| eval_robot | `unitree real machine inference verification of the model`                                               |
-
-# 1. 📦 Environment Setup
-
-## 1.1 🦾 LeRobot Environment Setup
-
-The purpose of this project is to use the [LeRobot](https://github.com/huggingface/lerobot) open-source framework to train and test data collected from Unitree robots. Therefore, it is necessary to install the LeRobot-related dependencies first. The installation steps are as follows, and you can also refer to the official [LeRobot](https://github.com/huggingface/lerobot) installation guide:
-
-```bash
-# Clone the source code
-git clone --recurse-submodules https://github.com/unitreerobotics/unitree_lerobot.git
-
-# If already downloaded:
-git submodule update --init --recursive
-
-# Create a conda environment
-conda create -n unitree_lerobot -c conda-forge python=3.10 pinocchio ffmpeg -y
-conda activate unitree_lerobot
-
-# Install LeRobot
-cd unitree_lerobot/lerobot && pip install -e .
-
-# Install unitree_lerobot
-cd ../../ && pip install -e .
-
-# Optional: verify CUDA after install
-python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda)"
-
-# Optional: install a CUDA build if torch.cuda.is_available() is False.
-# Keep torchvision >=0.21 and <0.23 for this LeRobot version.
-pip install --upgrade torch==2.6.0+cu121 torchvision==0.21.0+cu121 torchaudio==2.6.0+cu121 --index-url https://download.pytorch.org/whl/cu121
-```
-
-## 1.2 🕹️ unitree_sdk2_python
-
-For `DDS communication` on Unitree robots, some dependencies need to be installed. Follow the installation steps below:
-
-```bash
-git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
-cd unitree_sdk2_python  && pip install -e .
-```
-
-## 1.3 ✅ G1 Dex3 HeadcamOnly Copy-Run Pipeline
-
-Use this block when cloning the repo on a new machine and training the local HeadcamOnly dataset. Run it from the repository root after Section 1.1 has installed the environment.
-
-### Step 1: Define paths once
-
-The default layout is:
+This repository is based on `unitreerobotics/unitree_lerobot` and keeps the original LeRobot training entrypoint:
 
 ```text
-parent-folder/
+lerobot/src/lerobot/scripts/lerobot_train.py
+```
+
+The local project-specific dataset contract is:
+
+```text
+source dataset:    unitreerobotics/G1_Dex3_PickApple_Dataset
+local dataset id:  G1_Dex3_PickApple_Dataset_HeadcamOnly
+robot type:        Unitree_G1_Dex3_HeadcamOnly
+camera key:        observation.images.head_cam
+source camera:     observation.images.cam_left_high
+state shape:       [28]
+action shape:      [28]
+fps:               30
+LeRobot format:    v3.0
+```
+
+All commands below are for Ubuntu/Linux with bash or zsh. Do not use PowerShell syntax on the Ubuntu training machine.
+
+## 1. Expected Folder Layout
+
+Use this layout:
+
+```text
+~/work/unitree_lerobot_duong/
+  unitree_lerobot/
+  unitree_sdk2_python/
   datasets/
     G1_Dex3_PickApple_Dataset/
     G1_Dex3_PickApple_Dataset_HeadcamOnly/
-  unitree_lerobot/
 ```
 
-```powershell
-$PROJECT_ROOT = (Get-Location).Path
-$DATASET_PARENT = Join-Path (Split-Path $PROJECT_ROOT -Parent) "datasets"
-$DATASET_REPO_ID = "G1_Dex3_PickApple_Dataset_HeadcamOnly"
-$DATASET_DIR = Join-Path $DATASET_PARENT $DATASET_REPO_ID
-$SOURCE_DATASET_REPO_ID = "unitreerobotics/G1_Dex3_PickApple_Dataset"
-$SOURCE_DATASET_NAME = "G1_Dex3_PickApple_Dataset"
-$SOURCE_DATASET_DIR = Join-Path $DATASET_PARENT $SOURCE_DATASET_NAME
-
-New-Item -ItemType Directory -Force $DATASET_PARENT | Out-Null
-```
-
-If your datasets are stored elsewhere, change only `$DATASET_PARENT`, then recompute `$DATASET_DIR` and `$SOURCE_DATASET_DIR`.
-
-### Step 2: Download original dataset and generate HeadcamOnly
-
-Run `huggingface-cli login` first if Hugging Face requires authentication.
-
-```powershell
-python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id=r'$SOURCE_DATASET_REPO_ID', repo_type='dataset', local_dir=r'$SOURCE_DATASET_DIR')"
-
-python unitree_lerobot/utils/create_headcam_only_dataset.py `
-    --src-dir "$SOURCE_DATASET_DIR" `
-    --dst-dir "$DATASET_DIR" `
-    --source-video-key observation.images.cam_left_high `
-    --target-video-key observation.images.head_cam `
-    --overwrite
-```
-
-This converts the original multi-camera dataset into one camera stream:
-
-```text
-observation.images.cam_left_high -> observation.images.head_cam
-```
-
-### Step 3: Verify dataset metadata
-
-```powershell
-$INFO_PATH = Join-Path $DATASET_DIR "meta\info.json"
-$INFO = Get-Content $INFO_PATH -Raw | ConvertFrom-Json
-
-$INFO.codebase_version
-$INFO.robot_type
-$INFO.features.PSObject.Properties.Name | Where-Object { $_ -like "observation.images.*" }
-$INFO.features."observation.state".shape
-$INFO.features.action.shape
-```
-
-Expected result:
-
-```text
-v3.0
-Unitree_G1_Dex3_HeadcamOnly
-observation.images.head_cam
-28
-28
-```
-
-### Step 4: Train-test on 5 episodes
-
-This checks dataset loading, policy creation, CUDA selection, and checkpoint writing before full training.
-
-```powershell
-cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
-
-$TRAIN_STEPS = 200
-
-python src/lerobot/scripts/lerobot_train.py `
-    --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_DIR" `
-    --dataset.episodes=[0,1,2,3,4] `
-    --policy.push_to_hub=false `
-    --policy.type=act `
-    --policy.device=cuda `
-    --steps=$TRAIN_STEPS `
-    --batch_size=4 `
-    --num_workers=0 `
-    --save_freq=$TRAIN_STEPS `
-    --eval_freq=0
-```
-
-Expected markers:
-
-```text
-dataset.num_episodes=5
-policy.device='cuda'
-step:200
-Checkpoint policy after step 200
-```
-
-On Windows, the final symlink `checkpoints/last` can fail with `WinError 1314` if Developer Mode is off. The real model is still the step checkpoint:
-
-```text
-unitree_lerobot/lerobot/outputs/train/<date>/<run>_act/checkpoints/000200/pretrained_model
-```
-
-On Ubuntu/Linux this symlink issue is normally not present.
-
-### Step 5: Train full dataset
-
-Run this after the 5-episode test is valid. Do not pass `--dataset.episodes`; that is what makes LeRobot use the full dataset.
-
-```powershell
-$TRAIN_STEPS = 100000
-
-python src/lerobot/scripts/lerobot_train.py `
-    --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_DIR" `
-    --policy.push_to_hub=false `
-    --policy.type=act `
-    --policy.device=cuda `
-    --steps=$TRAIN_STEPS `
-    --save_freq=$TRAIN_STEPS `
-    --eval_freq=0
-```
-
-The model to reuse is:
-
-```text
-unitree_lerobot/lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model
-```
-
-### Step 6: Evaluate saved model on dataset
-
-Replace `<date>`, `<run>`, and `<step>` with the real folder produced by training.
-
-```powershell
-cd $PROJECT_ROOT
-
-$POLICY_PATH = "unitree_lerobot/lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model"
-
-python unitree_lerobot/eval_robot/eval_g1_dataset.py `
-    --policy.path="$POLICY_PATH" `
-    --repo_id=$DATASET_REPO_ID `
-    --root="$DATASET_DIR" `
-    --episodes=0 `
-    --frequency=30 `
-    --arm="G1_29" `
-    --ee="dex3" `
-    --visualization=true `
-    --send_real_robot=false
-```
-
-### Ubuntu/Linux bash equivalent
-
-Use this block on an Ubuntu training machine from the repository root. It follows the same path contract as the PowerShell workflow above.
+Clone the project:
 
 ```bash
+mkdir -p ~/work/unitree_lerobot_duong
+cd ~/work/unitree_lerobot_duong
+
+git clone --recurse-submodules https://github.com/Shynfromvn/unitree_lerobot_duong.git unitree_lerobot
+cd unitree_lerobot
+git submodule update --init --recursive
+```
+
+## 2. Create Environment
+
+Create and activate the conda environment:
+
+```bash
+conda create -n unitree_lerobot -c conda-forge python=3.10 pinocchio "ffmpeg>=7,<8" -y
+conda activate unitree_lerobot
+```
+
+Install LeRobot and this package from the repo root:
+
+```bash
+cd ~/work/unitree_lerobot_duong/unitree_lerobot
+
+cd lerobot
+pip install -e .
+
+cd ..
+pip install -e .
+```
+
+## 3. CUDA Setup
+
+### Standard CUDA Check
+
+Run:
+
+```bash
+python -c 'import torch; print(torch.__version__, torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "no cuda")'
+```
+
+### RTX PRO 6000 Blackwell
+
+On the Ubuntu machine with `NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition`, the working setup is PyTorch CUDA 12.8. This fixes the `sm_120 is not compatible` and `no kernel image is available for execution on the device` errors.
+
+```bash
+conda activate unitree_lerobot
+
+pip uninstall -y torch torchvision torchaudio
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+```
+
+Verify with an actual CUDA operation:
+
+```bash
+python -c 'import torch; print(torch.__version__, torch.version.cuda); print(torch.cuda.get_device_name(0)); print(torch.cuda.get_device_capability(0)); x=torch.randn(512,512,device="cuda"); y=x@x; torch.cuda.synchronize(); print("cuda ok")'
+```
+
+Expected:
+
+```text
+2.7.1+cu128 12.8
+NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition
+(12, 0)
+cuda ok
+```
+
+## 4. TorchCodec and FFmpeg
+
+This project uses LeRobot dataset video decoding. In this repo version the default backend can be `torchcodec`.
+
+Install compatible TorchCodec and runtime libraries:
+
+```bash
+conda activate unitree_lerobot
+
+conda install -y --override-channels -c conda-forge "ffmpeg>=7,<8"
+pip uninstall -y torchcodec
+pip install torchcodec==0.5 --index-url https://download.pytorch.org/whl/cu128
+pip install --force-reinstall nvidia-cuda-nvrtc-cu12==12.8.61
+pip install -U nvidia-npp-cu12
+```
+
+Set library path for the current shell:
+
+```bash
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$(python -c 'import site,glob; print(":".join(glob.glob(site.getsitepackages()[0]+"/nvidia/*/lib")))'):$LD_LIBRARY_PATH"
+```
+
+Check FFmpeg and TorchCodec:
+
+```bash
+ffmpeg -version | head -n 3
+ls "$CONDA_PREFIX"/lib/libavutil.so*
+find "$(python -c 'import site; print(site.getsitepackages()[0])')" -name 'libnppicc.so.12'
+python -c 'import torchcodec; from torchcodec.decoders import VideoDecoder; print("torchcodec ok")'
+```
+
+Expected FFmpeg version:
+
+```text
+ffmpeg version 7.x
+```
+
+Expected library:
+
+```text
+libavutil.so.59
+```
+
+Do not install plain `ffmpeg<8`; conda may choose `ffmpeg 2.8.6`, which is too old for TorchCodec.
+
+## 5. Unitree SDK for Simulation or Real Robot
+
+Install `unitree_sdk2_python` in the same conda env:
+
+```bash
+cd ~/work/unitree_lerobot_duong
+
+git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
+cd unitree_sdk2_python
+
+conda activate unitree_lerobot
+pip install -e .
+```
+
+Verify:
+
+```bash
+python -c 'import unitree_sdk2py; import cyclonedds; import cv2; print("unitree sdk ok")'
+```
+
+## 6. Define Dataset Paths
+
+Run these from the repository root:
+
+```bash
+cd ~/work/unitree_lerobot_duong/unitree_lerobot
+
 PROJECT_ROOT="$(pwd)"
 DATASET_PARENT="$(dirname "$PROJECT_ROOT")/datasets"
 DATASET_REPO_ID="G1_Dex3_PickApple_Dataset_HeadcamOnly"
@@ -259,522 +184,331 @@ DATASET_DIR="$DATASET_PARENT/$DATASET_REPO_ID"
 SOURCE_DATASET_REPO_ID="unitreerobotics/G1_Dex3_PickApple_Dataset"
 SOURCE_DATASET_NAME="G1_Dex3_PickApple_Dataset"
 SOURCE_DATASET_DIR="$DATASET_PARENT/$SOURCE_DATASET_NAME"
+ROBOT_TYPE="Unitree_G1_Dex3_HeadcamOnly"
 
 mkdir -p "$DATASET_PARENT"
+export PROJECT_ROOT DATASET_PARENT DATASET_REPO_ID DATASET_DIR SOURCE_DATASET_REPO_ID SOURCE_DATASET_NAME SOURCE_DATASET_DIR ROBOT_TYPE
+```
 
-export SOURCE_DATASET_REPO_ID SOURCE_DATASET_DIR
+Check:
+
+```bash
+echo "$DATASET_DIR"
+```
+
+Expected:
+
+```text
+/home/<user>/work/unitree_lerobot_duong/datasets/G1_Dex3_PickApple_Dataset_HeadcamOnly
+```
+
+## 7. Download and Generate HeadcamOnly Dataset
+
+If Hugging Face requires authentication:
+
+```bash
+huggingface-cli login
+```
+
+Download the source dataset:
+
+```bash
 python -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["SOURCE_DATASET_REPO_ID"], repo_type="dataset", local_dir=os.environ["SOURCE_DATASET_DIR"])'
+```
 
+Generate the HeadcamOnly dataset:
+
+```bash
 python unitree_lerobot/utils/create_headcam_only_dataset.py \
-    --src-dir "$SOURCE_DATASET_DIR" \
-    --dst-dir "$DATASET_DIR" \
-    --source-video-key observation.images.cam_left_high \
-    --target-video-key observation.images.head_cam \
-    --overwrite
-
-cd "$PROJECT_ROOT/unitree_lerobot/lerobot"
-
-TRAIN_STEPS=200
-python src/lerobot/scripts/lerobot_train.py \
-    --dataset.repo_id="$DATASET_REPO_ID" \
-    --dataset.root="$DATASET_DIR" \
-    --dataset.episodes=[0,1,2,3,4] \
-    --policy.push_to_hub=false \
-    --policy.type=act \
-    --policy.device=cuda \
-    --steps="$TRAIN_STEPS" \
-    --batch_size=4 \
-    --num_workers=0 \
-    --save_freq="$TRAIN_STEPS" \
-    --eval_freq=0
-
-TRAIN_STEPS=100000
-python src/lerobot/scripts/lerobot_train.py \
-    --dataset.repo_id="$DATASET_REPO_ID" \
-    --dataset.root="$DATASET_DIR" \
-    --policy.push_to_hub=false \
-    --policy.type=act \
-    --policy.device=cuda \
-    --steps="$TRAIN_STEPS" \
-    --save_freq="$TRAIN_STEPS" \
-    --eval_freq=0
+  --src-dir "$SOURCE_DATASET_DIR" \
+  --dst-dir "$DATASET_DIR" \
+  --source-video-key observation.images.cam_left_high \
+  --target-video-key observation.images.head_cam \
+  --overwrite
 ```
 
-# 2. ⚙️ Data Collection and Conversion
-
-## 2.1 🖼️ Load Datasets
-
-If you want to directly load the dataset we have already recorded,
-Load the [`unitreerobotics/G1_Dex3_ToastedBread_Dataset`](https://huggingface.co/datasets/unitreerobotics/G1_Dex3_ToastedBread_Dataset) dataset from Hugging Face. The default download location is `~/.cache/huggingface/lerobot/unitreerobotics`. If you want to load data from a local source, please change the `root` parameter.
-
-```python
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-import tqdm
-
-episode_index = 1
-dataset = LeRobotDataset(repo_id="unitreerobotics/G1_Dex3_ToastedBread_Dataset")
-
-from_idx = dataset.meta.episodes["dataset_from_index"][episode_index]
-to_idx = dataset.meta.episodes["dataset_to_index"][episode_index]
-
-for step_idx in tqdm.tqdm(range(from_idx, to_idx)):
-    step = dataset[step_idx]
-```
-
-For the local G1 Dex3 headcam-only dataset in this workspace, keep one shared dataset identity and reuse it in load, train, eval, and replay commands.
-Run these commands from the repository root. The default assumes `datasets/` is next to this repository; if your dataset is elsewhere, override only `$DATASET_PARENT`.
-
-```powershell
-$PROJECT_ROOT = (Get-Location).Path
-$DATASET_PARENT = Join-Path (Split-Path $PROJECT_ROOT -Parent) "datasets"
-$DATASET_REPO_ID = "G1_Dex3_PickApple_Dataset_HeadcamOnly"
-$DATASET_DIR = Join-Path $DATASET_PARENT $DATASET_REPO_ID
-$SOURCE_DATASET_REPO_ID = "unitreerobotics/G1_Dex3_PickApple_Dataset"
-$SOURCE_DATASET_NAME = "G1_Dex3_PickApple_Dataset"
-$ROBOT_TYPE = "Unitree_G1_Dex3_HeadcamOnly"
-
-New-Item -ItemType Directory -Force $DATASET_PARENT | Out-Null
-```
-
-```python
-from pathlib import Path
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
-project_root = Path.cwd()
-dataset_parent = (project_root / ".." / "datasets").resolve()
-dataset_dir = dataset_parent / "G1_Dex3_PickApple_Dataset_HeadcamOnly"
-
-dataset = LeRobotDataset(
-    repo_id="G1_Dex3_PickApple_Dataset_HeadcamOnly",
-    root=dataset_dir,
-)
-
-print(dataset.meta.robot_type)
-print(dataset.meta.camera_keys)
-print(dataset.num_episodes, dataset.num_frames)
-```
-
-Expected metadata:
-
-```text
-robot_type: Unitree_G1_Dex3_HeadcamOnly
-camera key: observation.images.head_cam
-state/action dim: 28
-fps: 30
-```
-
-`visualization`
-
-```bash
-cd unitree_lerobot/lerobot
-
-python src/lerobot/scripts/lerobot_dataset_viz.py \
-    --repo-id unitreerobotics/G1_Dex3_ToastedBread_Dataset \
-    --episode-index 0
-```
-
-For the local headcam-only dataset:
-
-```powershell
-cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
-
-python src/lerobot/scripts/lerobot_dataset_viz.py `
-    --repo-id "$DATASET_REPO_ID" `
-    --root "$DATASET_DIR" `
-    --episode-index 0
-```
-
-## 2.2 🔨 Data Collection
-
-If you want to record your own dataset. The open-source teleoperation project [avp_teleoperate](https://github.com/unitreerobotics/avp_teleoperate/tree/g1) can be used to collect data using the Unitree G1 humanoid robot. For more details, please refer to the [avp_teleoperate](https://github.com/unitreerobotics/avp_teleoperate/tree/g1) project.
-
-## 2.3 ✂️Data Processing
-
-When you finished the Data Collection step, it may be essential for you to process the data you have been collected. For example, if one of the episodes failed to complete the task, you need to delete the episode, to increase the data's quality.
-
-We have designed a data editor in this project, in order to help users process the data. Currently, it can cut off excess segments in the episodes, and delete the bad episodes.
-
-![](https://oss-global-cdn.unitree.com/static/986a520f8b444784b090a07b9efc6803_1455x1071.jpg)
-
-Before you launch the data editor, you need to install pyqt5.
-
-```bash
-conda activate unitree_lerobot
-pip install PyQt5
-```
-
-Launch the data editor as below.
-
-```bash
-cd data_editor
-python data_editor_EN.py
-```
-
-At first, click the button `Select Dataset Path`, choose the path of your dataset. For example, at the path tree below, `test_dataset/`is the path you need to choose.
-
-```bash
-test_dataset/
-    ├── episode_0001
-    ├── episode_0003
-    ├── episode_0004
-    ├── ...
-```
-
-You can drag the red line directly to seek playback, and drag the red line with Shift on your keyboard to select the playback range, and then trim the selected range with the button `Trim Selected Range`. If you want to delete the current episode, click the button `Delete Current Episode`.
-
-## 2.4 🛠️ Data Conversion
-
-The data collected using [avp_teleoperate](https://github.com/unitreerobotics/avp_teleoperate/tree/g1) is stored in JSON format. Assuming the collected data is stored in the `$HOME/datasets/task_name`, the format is as follows
-
-```
-datasets/                               # Dataset folder
-    └── task_name /                     # Task name
-        ├── episode_0001                # First trajectory
-        │    ├──audios/                 # Audio information
-        │    ├──colors/                 # Image information
-        │    ├──depths/                 # Depth image information
-        │    └──data.json               # State and action information
-        ├── episode_0002
-        ├── episode_...
-        ├── episode_xxx
-```
-
-### 2.4.1 🔀 Sort and Rename
-
-When generating datasets for LeRobot, it is recommended to ensure that the data naming convention, starting from `episode_0`, is sequential and continuous. You can use the following script to `sort and rename` the data accordingly.
-
-```bash
-python unitree_lerobot/utils/sort_and_rename_folders.py \
-        --data_dir $HOME/datasets/task_name
-```
-
-#### 2.4.2 🔄 Conversion
-
-Convert `Unitree JSON` Dataset to `LeRobot` Format. You can define your own `robot_type` based on [ROBOT_CONFIGS](https://github.com/unitreerobotics/unitree_lerobot/blob/main/unitree_lerobot/utils/convert_unitree_json_to_lerobot.py#L154).
-
-```bash
-# --raw-dir     Corresponds to the directory of your JSON dataset
-# --repo-id     Your unique repo ID on Hugging Face Hub
-# --push_to_hub Whether or not to upload the dataset to Hugging Face Hub (true or false)
-# --robot_type  The type of the robot used in the dataset (e.g., Unitree_Z1_Single, Unitree_Z1_Dual, Unitree_G1_Dex1, Unitree_G1_Dex3, Unitree_G1_Brainco, Unitree_G1_Inspire,Unitree_G1_Dex1_Sim)
-
-python unitree_lerobot/utils/convert_unitree_json_to_lerobot.py \
-    --raw-dir $HOME/datasets \
-    --repo-id your_name/repo_task_name \
-    --robot_type Unitree_G1_Dex3 \
-    --push_to_hub
-```
-
-For raw JSON data that should become a G1 Dex3 headcam-only dataset, use the dedicated robot type from `unitree_lerobot/utils/constants.py`:
-
-```powershell
-$RAW_DATA_ROOT = "<path-to-raw-json-dataset>"
-
-python unitree_lerobot/utils/convert_unitree_json_to_lerobot.py `
-    --raw-dir "$RAW_DATA_ROOT" `
-    --repo-id "$DATASET_REPO_ID" `
-    --robot_type "$ROBOT_TYPE"
-```
-
-This keeps the generated image feature aligned with the training dataset key:
-
-```text
-observation.images.head_cam
-```
-
-If the repository was cloned without local data, first download the original multi-camera dataset, then generate the headcam-only dataset:
-
-```powershell
-$SOURCE_DATASET_DIR = Join-Path $DATASET_PARENT $SOURCE_DATASET_NAME
-$TARGET_DATASET_DIR = $DATASET_DIR
-
-# Run this first if the source dataset is private:
-# huggingface-cli login
-
-python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id=r'$SOURCE_DATASET_REPO_ID', repo_type='dataset', local_dir=r'$SOURCE_DATASET_DIR')"
-
-python unitree_lerobot/utils/create_headcam_only_dataset.py `
-    --src-dir "$SOURCE_DATASET_DIR" `
-    --dst-dir "$TARGET_DATASET_DIR" `
-    --source-video-key observation.images.cam_left_high `
-    --target-video-key observation.images.head_cam `
-    --overwrite
-```
-
-`$SOURCE_DATASET_REPO_ID` points to the original G1 Dex3 PickApple dataset on Hugging Face. The conversion copies:
+This converts:
 
 ```text
 observation.images.cam_left_high -> observation.images.head_cam
 ```
 
-Make sure `unitree_lerobot/utils/create_headcam_only_dataset.py` is committed with the GitHub repo; a fresh clone needs this script to regenerate the local training dataset.
+## 8. Verify Dataset Metadata
 
-**Node:** `Unitree_G1_Dex1_Sim` is a robot type used for data collection in unitree_sim_isaaclab
-, with the head equipped with a single-viewpoint camera.
+Run this as one line:
 
-# 3. 🚀 Training
-
-[For training, please refer to the official LeRobot training example and parameters for further guidance.](https://github.com/huggingface/lerobot/tree/main/docs/source)
-
-For the local headcam-only dataset, use the same variables from Section 2.1 and call the original LeRobot train entrypoint directly. This avoids maintaining a second training script.
-
-```powershell
-cd (Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot")
-
-python src/lerobot/scripts/lerobot_train.py `
-    --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_DIR" `
-    --policy.push_to_hub=false `
-    --policy.type=act `
-    --eval_freq=0
+```bash
+python -c 'import json,pathlib; p=pathlib.Path("'"$DATASET_DIR"'")/"meta/info.json"; info=json.loads(p.read_text()); print(info["codebase_version"]); print(info["robot_type"]); print([k for k in info["features"] if k.startswith("observation.images.")]); print(info["features"]["observation.state"]["shape"]); print(info["features"]["action"]["shape"])'
 ```
 
-Before a long run, use a one-step smoke test on 5 episodes:
+Expected:
 
-```powershell
-python src/lerobot/scripts/lerobot_train.py `
-    --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_DIR" `
-    --dataset.episodes=[0,1,2,3,4] `
-    --policy.push_to_hub=false `
-    --policy.type=act `
-    --steps=1 `
-    --batch_size=1 `
-    --num_workers=0 `
-    --eval_freq=0 `
-    --save_checkpoint=false
+```text
+v3.0
+Unitree_G1_Dex3_HeadcamOnly
+['observation.images.head_cam']
+[28]
+[28]
 ```
 
-If the smoke test succeeds, train on the full dataset by removing `--dataset.episodes`:
+If the command tries to read `meta/info.json` without the full dataset path, `DATASET_DIR` is empty in that shell. Re-run Section 6.
 
-```powershell
-$TRAIN_STEPS = 100000
+## 9. Train Test on 5 Episodes
 
-python src/lerobot/scripts/lerobot_train.py `
-    --dataset.repo_id=$DATASET_REPO_ID `
-    --dataset.root="$DATASET_DIR" `
-    --policy.push_to_hub=false `
-    --policy.type=act `
-    --steps=$TRAIN_STEPS `
-    --save_freq=$TRAIN_STEPS `
-    --eval_freq=0
+Use this before full training. The quotes around `--dataset.episodes='[0,1,2,3,4]'` are required in zsh.
+
+```bash
+cd ~/work/unitree_lerobot_duong/unitree_lerobot/lerobot
+
+TRAIN_STEPS=200
+
+python src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id="$DATASET_REPO_ID" \
+  --dataset.root="$DATASET_DIR" \
+  --dataset.episodes='[0,1,2,3,4]' \
+  --policy.push_to_hub=false \
+  --policy.type=act \
+  --policy.device=cuda \
+  --steps="$TRAIN_STEPS" \
+  --batch_size=4 \
+  --num_workers=0 \
+  --save_freq="$TRAIN_STEPS" \
+  --eval_freq=0
 ```
+
+Expected log markers:
+
+```text
+dataset.num_episodes=5
+Start offline training on a fixed dataset
+step:200
+Checkpoint policy after step 200
+```
+
+## 10. Full Training
+
+Full training uses the full dataset by omitting `--dataset.episodes`.
+
+The repo default is `steps=100000`. Do not pass `--steps` if you want the default.
+
+```bash
+cd ~/work/unitree_lerobot_duong/unitree_lerobot/lerobot
+
+python src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id="$DATASET_REPO_ID" \
+  --dataset.root="$DATASET_DIR" \
+  --policy.push_to_hub=false \
+  --policy.type=act \
+  --policy.device=cuda \
+  --eval_freq=0
+```
+
+For the RTX PRO 6000 Blackwell machine, a practical higher-throughput command is:
+
+```bash
+python src/lerobot/scripts/lerobot_train.py \
+  --dataset.repo_id="$DATASET_REPO_ID" \
+  --dataset.root="$DATASET_DIR" \
+  --policy.push_to_hub=false \
+  --policy.type=act \
+  --policy.device=cuda \
+  --batch_size=64 \
+  --num_workers=4 \
+  --eval_freq=0
+```
+
+If stable and GPU memory is still low, try `--batch_size=96`. If out of memory, use `--batch_size=48` or `--batch_size=32`.
+
+Monitor:
+
+```bash
+watch -n 1 nvidia-smi
+```
+
+## 11. Checkpoint Location
 
 Checkpoints are saved under:
 
 ```text
-unitree_lerobot/lerobot/outputs/train/<date>/<run>_<policy>/checkpoints/<step>/pretrained_model
+lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model
 ```
 
-Use the real checkpoint path for evaluation and deployment. The `checkpoints/last` entry is only a convenience symlink created by LeRobot.
+Example:
 
-On Windows, creating `checkpoints/last` may fail in a normal VS Code terminal with `WinError 1314`. For a clean full training run on Windows, enable Developer Mode before training:
+```bash
+POLICY_PATH="$PROJECT_ROOT/lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model"
+```
+
+## 12. Evaluate Checkpoint on Dataset
+
+Run from repo root:
+
+```bash
+cd "$PROJECT_ROOT"
+
+POLICY_PATH="$PROJECT_ROOT/lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model"
+
+python unitree_lerobot/eval_robot/eval_g1_dataset.py \
+  --policy.path="$POLICY_PATH" \
+  --repo_id="$DATASET_REPO_ID" \
+  --root="$DATASET_DIR" \
+  --episodes=0 \
+  --frequency=30 \
+  --arm="G1_29" \
+  --ee="dex3" \
+  --visualization=true \
+  --send_real_robot=false
+```
+
+When prompted, enter:
 
 ```text
-Windows Settings -> Privacy & security -> For developers -> Developer Mode -> On
+s
 ```
 
-If Developer Mode is not enabled, keep `--save_freq=$TRAIN_STEPS` so LeRobot saves only at the final step. The real checkpoint folder is written before the symlink step, so the final model can still be used even if the process exits with the symlink error after saving.
+## 13. Run Checkpoint in Unitree Simulation
 
-- `Train Act Policy` [Please refer to it in detail](https://github.com/huggingface/lerobot/blob/main/docs/source/act.mdx)
+Start the Unitree simulation and image server first. Then run:
 
 ```bash
-cd unitree_lerobot/lerobot
+cd "$PROJECT_ROOT"
 
-python src/lerobot/scripts/lerobot_train.py \
-    --dataset.repo_id=unitreerobotics/G1_Dex3_ToastedBread_Dataset \
-    --policy.push_to_hub=false \
-    --policy.type=act
+POLICY_PATH="$PROJECT_ROOT/lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model"
+
+python unitree_lerobot/eval_robot/eval_g1_sim.py \
+  --policy.path="$POLICY_PATH" \
+  --repo_id="$DATASET_REPO_ID" \
+  --root="$DATASET_DIR" \
+  --episodes=0 \
+  --frequency=30 \
+  --arm="G1_29" \
+  --ee="dex3" \
+  --visualization=true \
+  --save_data=false \
+  --task_dir="./data" \
+  --max_episodes=1200 \
+  --image_host="127.0.0.1" \
+  --rename_map='{"observation.images.cam_left_high":"observation.images.head_cam"}'
 ```
 
-- `Train Diffusion Policy` [Please refer to it in detail](https://github.com/huggingface/lerobot/blob/main/docs/source/policy_diffusion_README.md)
+Change `--image_host` if the image server is on another machine.
+
+The rename map is required because the trained policy expects:
+
+```text
+observation.images.head_cam
+```
+
+while the current simulation image processing emits:
+
+```text
+observation.images.cam_left_high
+```
+
+When prompted, enter:
+
+```text
+s
+```
+
+## 14. Replay Dataset on Robot
 
 ```bash
-cd unitree_lerobot/lerobot
-
-python src/lerobot/scripts/lerobot_train.py\
-    --dataset.repo_id=unitreerobotics/G1_Dex3_ToastedBread_Dataset \
-    --policy.push_to_hub=false \
-    --policy.type=diffusion
-```
-
-- `Train Pi0 Policy` [Please refer to it in detail](https://github.com/huggingface/lerobot/blob/main/docs/source/pi0.mdx)
-
-```bash
-cd unitree_lerobot/lerobot
-
-python src/lerobot/scripts/lerobot_train.py \
-    --dataset.repo_id=unitreerobotics/G1_Dex3_ToastedBread_Dataset \
-    --policy.push_to_hub=false \
-    --policy.type=pi0
-```
-
-- `Train Pi05 Policy` [Please refer to it in detail](https://github.com/huggingface/lerobot/blob/main/docs/source/pi05.mdx)
-
-```bash
-cd unitree_lerobot/lerobot
-
-python src/lerobot/scripts/lerobot_train.py \
-    --dataset.repo_id=unitreerobotics/G1_Dex3_ToastedBread_Dataset \
-    --policy.type=pi05 \
-    --output_dir=./outputs/pi05_training \
-    --job_name=pi05_training \
-    --policy.pretrained_path=lerobot/pi05_base \
-    --policy.compile_model=true \
-    --policy.gradient_checkpointing=true \
-    --policy.dtype=bfloat16 \
-    --policy.device=cuda \
-    --policy.push_to_hub=false
-```
-
-- `Train Gr00t Policy` [Please refer to it in detail](https://github.com/huggingface/lerobot/blob/main/docs/source/groot.mdx)
-
-```bash
-cd unitree_lerobot/lerobot
-
-python src/lerobot/scripts/lerobot_train.py \
-    --dataset.repo_id=unitreerobotics/G1_Dex3_ToastedBread_Dataset \
-    --output_dir=./outputs/groot_training \
-    --policy.push_to_hub=false \
-    --policy.type=groot \
-    --policy.tune_diffusion_model=false \
-    --job_name=groot_training
-```
-
-If you want to use multi-GPU training, please refer to the details [here](https://github.com/huggingface/lerobot/blob/main/docs/source/multi_gpu_training.mdx)
-
-# 4. 🤖 Real-World Testing
-
-To test your trained model on a real robot, you can use the eval_g1.py script located in the eval_robot folder. Here’s how to run it:
-
-[To open the image_server, follow these steps](https://github.com/unitreerobotics/avp_teleoperate?tab=readme-ov-file#31-%EF%B8%8F-image-server)
-
-```bash
-
-# --policy.path: Specifies the path to the pre-trained model, used for evaluating the policy.
-# --repo_id: The repository ID of the dataset, used to load the dataset required for evaluation.
-# --root: The root directory path of the dataset, defaults to an empty string.
-# --episodes: The number of evaluation episodes; setting it to 0 uses the default value.
-# --frequency: The evaluation frequency (in Hz), used to control the time step of the evaluation.
-# --arm: The model of the robotic arm, (e.g., G1_29, G1_23).
-# --ee: The type of end-effector, (e.g., dex3, dex1, inspire1, brainco).
-# --visualization: Whether to enable visualization; setting it to true enables it.
-# --send_real_robot: Whether to send commands to the real robot.
-
-
-python unitree_lerobot/eval_robot/eval_g1.py  \
-    --policy.path=unitree_lerobot/lerobot/outputs/train/2025-03-25/22-11-16_diffusion/checkpoints/100000/pretrained_model \
-    --repo_id=unitreerobotics/G1_Dex3_ToastedBread_Dataset \
-    --root="" \
-    --episodes=0 \
-    --frequency=30 \
-    --arm="G1_29" \
-    --ee="dex3" \
-    --visualization=true \
-
-If you want to run inference tests in the unitree_sim_isaaclab simulation environment, please execute:
-
-# --save_data: Allows recording data while running inference. At present, this option is limited to the sim environment.
-# --task_dir: the directory where data is stored
-# --max_episodes: the maximum number of inference runs per task; if exceeded, the task is considered failed by default
-
-python unitree_lerobot/eval_robot/eval_g1_sim.py  \
-    --policy.path=unitree_lerobot/lerobot/outputs/train/2025-03-25/22-11-16_diffusion/checkpoints/100000/pretrained_model \
-    --repo_id=unitreerobotics/G1_Dex3_ToastedBread_Dataset \
-    --root="" \
-    --episodes=0 \
-    --frequency=30 \
-    --arm="G1_29" \
-    --ee="dex3" \
-    --visualization=true \
-    --save_data=false \
-    --task_dir="./data" \
-    --max_episodes=1200
-
-# If you want to evaluate the model's performance on the dataset, use the command below for testing
-python unitree_lerobot/eval_robot/eval_g1_dataset.py  \
-    --policy.path=unitree_lerobot/lerobot/outputs/train/2025-03-25/22-11-16_diffusion/checkpoints/100000/pretrained_model \
-    --repo_id=unitreerobotics/G1_Dex3_ToastedBread_Dataset \
-    --root="" \
-    --episodes=0 \
-    --frequency=30 \
-    --arm="G1_29" \
-    --ee="dex3" \
-    --visualization=true \
-    --send_real_robot=false
-```
-
-For the local headcam-only dataset, keep `--repo_id` and `--root` consistent with the training command:
-
-```powershell
-$POLICY_PATH = "unitree_lerobot/lerobot/outputs/train/<date>/<run>_<policy>/checkpoints/<step>/pretrained_model"
-
-python unitree_lerobot/eval_robot/eval_g1_dataset.py `
-    --policy.path="$POLICY_PATH" `
-    --repo_id=$DATASET_REPO_ID `
-    --root="$DATASET_DIR" `
-    --episodes=0 `
-    --frequency=30 `
-    --arm="G1_29" `
-    --ee="dex3" `
-    --visualization=true `
-    --send_real_robot=false
-```
-
-**Note:** If you are using the `unitree_sim_isaaclab` simulation environment, please refer to [unitree_sim_isaaclab](https://github.com/unitreerobotics/unitree_sim_isaaclab) for environment setup and usage instructions.
-
-# 5. 🎬 Replay Datasets On Robot
-
-This section provides instructions on how to replay datasets on the robot.
-It is useful for testing and validating the robot's behavior using pre-recorded data.
-
-```bash
-
-# --repo_id         Dataset repository ID on Hugging Face Hub (e.g., unitreerobotics/G1_Dex3_ToastedBread_Dataset)
-# --root            Path to the root directory of the dataset (leave empty to use the default cache path)
-# --episodes        Index of the episode to replay (e.g., 0 for the first episode)
-# --frequency       Replay frequency in Hz (e.g., 30 for 30 frames per second)
-# --arm             Type of robot arm used (e.g., G1_29, G1_23)
-# --ee              Type of end-effector used (e.g., dex3, dex1, inspire1, brainco)
-# --visualization   Enable or disable visualization during replay (true for enabling, false for disabling)
+cd "$PROJECT_ROOT"
 
 python unitree_lerobot/eval_robot/replay_robot.py \
-    --repo_id=unitreerobotics/G1_Dex3_ToastedBread_Dataset \
-    --root="" \
-    --episodes=0 \
-    --frequency=30 \
-    --arm="G1_29" \
-    --ee="dex3" \
-    --visualization=true
+  --repo_id="$DATASET_REPO_ID" \
+  --root="$DATASET_DIR" \
+  --episodes=0 \
+  --frequency=30 \
+  --arm="G1_29" \
+  --ee="dex3" \
+  --visualization=true
 ```
 
-For the local headcam-only dataset:
+## 15. Troubleshooting
 
-```powershell
-python unitree_lerobot/eval_robot/replay_robot.py `
-    --repo_id=$DATASET_REPO_ID `
-    --root="$DATASET_DIR" `
-    --episodes=0 `
-    --frequency=30 `
-    --arm="G1_29" `
-    --ee="dex3" `
-    --visualization=true
+### zsh shows `bquote>`
+
+You pasted PowerShell backticks into zsh. Press `Ctrl+C` and use Linux line continuation `\`.
+
+Wrong in zsh:
+
+```text
+`
 ```
 
-# 6. 🤔 Troubleshooting
+Right in zsh:
 
-| Problem                                                                                                                                                                                                                                     | Solution                                                       |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| **Why use `LeRobot v2.0`?**                                                                                                                                                                                                                 | [Explanation](https://github.com/huggingface/lerobot/pull/461) |
-| **401 Client Error: Unauthorized** (`huggingface_hub.errors.HfHubHTTPError`)                                                                                                                                                                | Run `huggingface-cli login` to authenticate.                   |
-| **FFmpeg-related errors:** <br> Q1: `Unknown encoder 'libsvtav1'` <br> Q2: `FileNotFoundError: No such file or directory: 'ffmpeg'` <br> Q3: `RuntimeError: Could not load libtorchcodec. Likely causes: FFmpeg is not properly installed.` | Install FFmpeg: <br> `conda install -c conda-forge ffmpeg`     |
-| **Access to model `google/paligemma-3b-pt-224` is restricted.**                                                                                                                                                                             | Run `huggingface-cli login` and request access if needed.      |
+```text
+\
+```
 
-# 7. 🙏 Acknowledgement
+### `Repo id ...: ''`
 
-This code builds upon following open-source code-bases. Please visit the URLs to see the respective LICENSES (If you find these projects valuable, it would be greatly appreciated if you could give them a star rating.):
+The dataset repo variable is empty. Re-run Section 6 before downloading:
 
-1. https://github.com/huggingface/lerobot
-2. https://github.com/unitreerobotics/unitree_sdk2_python
-3. https://github.com/unitreerobotics/xr_teleoperate
-4. https://github.com/unitreerobotics/unitree_sim_isaaclab
+```bash
+echo "$SOURCE_DATASET_REPO_ID"
+echo "$SOURCE_DATASET_DIR"
+```
+
+### `FileNotFoundError: meta/info.json`
+
+`DATASET_DIR` is empty or points to the wrong folder. Re-run Section 6 and check:
+
+```bash
+ls "$DATASET_DIR/meta/info.json"
+```
+
+### `sm_120 is not compatible` or `no kernel image is available`
+
+Install PyTorch CUDA 12.8 as shown in Section 3.
+
+### `Could not load libtorchcodec`
+
+Check:
+
+```bash
+ffmpeg -version | head -n 3
+ls "$CONDA_PREFIX"/lib/libavutil.so*
+find "$(python -c 'import site; print(site.getsitepackages()[0])')" -name 'libnppicc.so.12'
+```
+
+The working target is:
+
+```text
+torch 2.7.1+cu128
+torchcodec 0.5+cu128
+ffmpeg 7.x
+libavutil.so.59
+libnppicc.so.12
+```
+
+### SSH or tmux training
+
+Use tmux for long runs:
+
+```bash
+tmux new -s train_lerobot
+```
+
+Detach:
+
+```text
+Ctrl+B then D
+```
+
+Reattach:
+
+```bash
+tmux attach -t train_lerobot
+```
+
+## References
+
+- Upstream Unitree repository: https://github.com/unitreerobotics/unitree_lerobot
+- Project repository: https://github.com/Shynfromvn/unitree_lerobot_duong
+- Unitree SDK: https://github.com/unitreerobotics/unitree_sdk2_python
+- PyTorch install selector: https://pytorch.org/get-started/locally/
+- TorchCodec README: https://github.com/pytorch/torchcodec
