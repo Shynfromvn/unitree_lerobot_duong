@@ -15,6 +15,76 @@ References checked:
 - PyTorch install selector: https://pytorch.org/get-started/locally/
 - TorchCodec README: https://github.com/pytorch/torchcodec
 
+## Difference From Upstream
+
+This fork keeps the upstream Unitree/LeRobot architecture, but adds a project-specific HeadcamOnly workflow and fixes local evaluation paths for that workflow.
+
+### Kept From Upstream
+
+- The original LeRobot training entrypoint remains:
+
+```text
+lerobot/src/lerobot/scripts/lerobot_train.py
+```
+
+- The original Unitree eval entrypoints remain:
+
+```text
+unitree_lerobot/eval_robot/eval_g1.py
+unitree_lerobot/eval_robot/eval_g1_sim.py
+unitree_lerobot/eval_robot/eval_g1_dataset.py
+unitree_lerobot/eval_robot/replay_robot.py
+```
+
+- The G1 URDF/MJCF assets are still used as robot description assets:
+
+```text
+unitree_lerobot/eval_robot/assets/g1/
+```
+
+- Simulation eval is still designed around Unitree simulator communication through DDS and image server, as in upstream documentation for `unitree_sim_isaaclab`.
+
+### Added or Changed in This Fork
+
+| Area | Upstream behavior | This fork behavior | Reason |
+| --- | --- | --- | --- |
+| Dataset workflow | Uses Unitree public dataset ids directly in examples. | Adds local `G1_Dex3_PickApple_Dataset_HeadcamOnly` workflow. | Train on one head camera stream matching the project dataset. |
+| Camera key | Public examples commonly use original camera keys. | Standardizes policy input to `observation.images.head_cam`. | Keeps training, eval, and generated metadata aligned. |
+| Dataset generation | No dedicated HeadcamOnly copy workflow in upstream README. | Documents and keeps `create_headcam_only_dataset.py`. | Reproducibly generate the local dataset from the source Hugging Face dataset. |
+| README commands | Upstream has generic bash examples and this fork previously mixed PowerShell/Linux. | README is now Linux/zsh-first. | The active training machine is Ubuntu/Linux and previous PowerShell blocks failed in zsh. |
+| `eval_g1_dataset.py` | Accepted `--root` in config but loaded dataset by `repo_id` only. | Loads `LeRobotDataset(repo_id=cfg.repo_id, root=cfg.root)`. | Required for local-only datasets. |
+| `eval_g1_sim.py` image API | Had older image shared-memory expectations. | Uses current `setup_image_client()` return shape `(image_client, image_config)`. | Matches current `make_robot.py`. |
+| `eval_g1_sim.py` dataset loading | Loaded dataset by `repo_id` only. | Loads dataset with `root=cfg.root`. | Required for local HeadcamOnly metadata and initial pose. |
+| Sim image host | Not exposed in `EvalRealConfig`. | Adds `image_host` config field. | Allows `--image_host=127.0.0.1` or remote sim host. |
+| Eval helper | No wrapper script for post-training sim eval. | Adds `scripts/eval_g1_sim_after_train.sh`. | Auto-resolves paths/checkpoint and runs the correct eval command. |
+| Sim video review | No local helper to turn saved sim frames into an MP4. | Adds `scripts/eval_g1_sim_record_video.sh` and `scripts/episode_frames_to_video.py`. | Lets the policy be reviewed visually before trying the real robot. |
+| MuJoCo handling | Asset README says MJCF can be opened in MuJoCo viewer. | Adds `scripts/view_g1_mujoco_asset.sh` and clarifies it is only visualization. | Prevents confusing MJCF viewer with DDS sim eval. |
+| Blackwell GPU setup | Not project-specific. | Documents `torch==2.7.1+cu128` for `sm_120`. | Fixes RTX PRO 6000 Blackwell CUDA kernel support. |
+| TorchCodec setup | Upstream generic dependency flow. | Documents `torchcodec==0.5+cu128`, FFmpeg 7, NPP/NVRTC libs. | Fixes video decode on the Ubuntu training machine. |
+
+### Current Fork-Specific Files
+
+These are project-specific and should be maintained when rebasing from upstream:
+
+```text
+README.md
+report_codex.md
+scripts/eval_g1_sim_after_train.sh
+scripts/eval_g1_sim_record_video.sh
+scripts/episode_frames_to_video.py
+scripts/view_g1_mujoco_asset.sh
+unitree_lerobot/utils/create_headcam_only_dataset.py
+```
+
+These source-code changes are also fork-specific unless upstream later makes equivalent fixes:
+
+```text
+unitree_lerobot/eval_robot/eval_g1_dataset.py
+unitree_lerobot/eval_robot/eval_g1_sim.py
+unitree_lerobot/eval_robot/utils/sim_savedata_utils.py
+unitree_lerobot/utils/constants.py
+```
+
 ## Final Workflow Contract
 
 Dataset:
@@ -219,6 +289,19 @@ Reason:
 
 - The old cleanup helper expected shared-memory resources and was no longer correct for the current image client object.
 
+Change 2b: Close `EpisodeWriter` when recording sim data.
+
+```python
+if "episode_writer" in locals() and episode_writer:
+    episode_writer.close()
+```
+
+Reason:
+
+- When `--save_data=true`, `EpisodeWriter` saves camera frames and `data.json` in a background worker.
+- Closing it in `finally` flushes queued frames and writes the episode metadata before the process exits.
+- This is required for reliable post-run video conversion, especially when stopping eval manually after observing enough behavior.
+
 Change 3: Use the local dataset root.
 
 ```python
@@ -257,7 +340,134 @@ Effect:
 
 or another host IP if the image server runs on a different machine.
 
-### 5. unitree_lerobot/utils/create_headcam_only_dataset.py
+### 5. scripts/eval_g1_sim_after_train.sh
+
+Change:
+
+- Added a Linux helper script for running `eval_g1_sim.py` after training completes.
+
+What it does:
+
+- Derives `PROJECT_ROOT` from the script location.
+- Uses the standard project dataset variables:
+
+```bash
+DATASET_REPO_ID=G1_Dex3_PickApple_Dataset_HeadcamOnly
+DATASET_DIR=<parent>/datasets/G1_Dex3_PickApple_Dataset_HeadcamOnly
+```
+
+- Uses `POLICY_PATH` if provided.
+- If `POLICY_PATH` is not provided, finds the newest local checkpoint matching:
+
+```text
+lerobot/outputs/train/*/*_act/checkpoints/*/pretrained_model
+```
+
+- Checks that:
+
+```text
+$POLICY_PATH
+$DATASET_DIR/meta/info.json
+```
+
+exist before starting eval.
+
+- Sets `LD_LIBRARY_PATH` from `CONDA_PREFIX` and Python `nvidia/*/lib` folders when available.
+- Runs `unitree_lerobot/eval_robot/eval_g1_sim.py` with:
+
+```bash
+--image_host="$IMAGE_HOST"
+--rename_map='{"observation.images.cam_left_high":"observation.images.head_cam"}'
+```
+
+Reason:
+
+- The trained checkpoint can be produced on a separate SSH machine.
+- The eval machine needs one stable command that checks paths and runs the correct simulation eval command.
+- It also documents that `eval_g1_sim.py` requires an already-running external simulator and image server.
+
+Important clarification:
+
+- This script does not start MuJoCo or IsaacLab.
+- It starts only the policy eval client.
+- The simulator must already publish the Unitree DDS topics and camera image stream.
+
+### 6. scripts/view_g1_mujoco_asset.sh
+
+Change:
+
+- Added a small MuJoCo asset viewer script for:
+
+```text
+unitree_lerobot/eval_robot/assets/g1/g1_body29_hand14.xml
+```
+
+Reason:
+
+- The repo includes G1 MJCF/URDF assets.
+- The asset README says the MJCF can be opened in MuJoCo viewer.
+- This helps inspect the robot model, but it is not the same as running `eval_g1_sim.py`.
+
+Important clarification:
+
+- MuJoCo viewer is model visualization only in this repo.
+- `eval_g1_sim.py` is wired to Unitree DDS/image-server simulation interfaces, not a local MuJoCo step loop.
+
+### 7. scripts/eval_g1_sim_record_video.sh
+
+Change:
+
+- Added a Linux helper script for recording one simulation eval run and converting the saved frames to MP4.
+
+What it does:
+
+- Runs `scripts/eval_g1_sim_after_train.sh` with:
+
+```bash
+SAVE_DATA=true
+TASK_DIR="$PROJECT_ROOT/data/sim_eval_recordings"
+MAX_EPISODES=900
+FREQUENCY=30
+```
+
+- Converts the latest saved episode to MP4 through `scripts/episode_frames_to_video.py`.
+- Keeps trying conversion even if the eval process exits non-zero, so flushed frames can still become a video after a manual stop or sim-side interruption.
+
+Reason:
+
+- The user needs to inspect policy behavior in simulation as a video before deploying to the real robot.
+- Upstream `eval_g1_sim.py` saves episode images/data but does not provide a one-command MP4 review workflow.
+
+Output:
+
+```text
+data/sim_eval_recordings/episode_XXXX/episode_XXXX_color_0.mp4
+```
+
+### 8. scripts/episode_frames_to_video.py
+
+Change:
+
+- Added a small OpenCV utility that converts `EpisodeWriter` JPEG frames to MP4.
+
+Input:
+
+```text
+<task_dir>/episode_XXXX/colors/*_color_0.jpg
+```
+
+Default output:
+
+```text
+<task_dir>/episode_XXXX/episode_XXXX_color_0.mp4
+```
+
+Reason:
+
+- `EpisodeWriter` saves image frames, not an MP4.
+- The MP4 is the convenient review artifact for comparing model behavior before real-robot testing.
+
+### 9. unitree_lerobot/utils/create_headcam_only_dataset.py
 
 Status:
 
@@ -283,7 +493,7 @@ Reason:
 - Dataset files are not committed.
 - A new Linux machine must be able to regenerate the local training dataset from the source Hugging Face dataset.
 
-### 6. unitree_lerobot/utils/constants.py
+### 10. unitree_lerobot/utils/constants.py
 
 Status:
 
@@ -301,7 +511,7 @@ Reason:
 
 - Future raw Unitree JSON conversions must produce the same camera key used by the training dataset.
 
-### 7. .gitignore
+### 11. .gitignore
 
 Purpose:
 
@@ -344,6 +554,7 @@ The README now contains the canonical Linux commands for:
 - Full train with optional higher batch size.
 - Dataset evaluation.
 - Simulation evaluation with `--image_host` and `--rename_map`.
+- Simulation recording to MP4 with `scripts/eval_g1_sim_record_video.sh`.
 - Dataset replay.
 
 ## Important Lessons Captured
@@ -450,8 +661,13 @@ libnppicc.so.12
 After this documentation pass:
 
 ```bash
-git add README.md report_codex.md
-git commit -m "Document Linux G1 Dex3 HeadcamOnly workflow"
+git add README.md report_codex.md \
+  unitree_lerobot/eval_robot/eval_g1_sim.py \
+  scripts/eval_g1_sim_after_train.sh \
+  scripts/eval_g1_sim_record_video.sh \
+  scripts/episode_frames_to_video.py \
+  scripts/view_g1_mujoco_asset.sh
+git commit -m "Add Linux G1 Dex3 sim eval recording workflow"
 ```
 
 If code changes from earlier are not already committed, include:

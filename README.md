@@ -368,7 +368,27 @@ s
 
 ## 13. Run Checkpoint in Unitree Simulation
 
-Start the Unitree simulation and image server first. Then run:
+The upstream Unitree README describes `eval_g1_sim.py` as simulation inference for `unitree_sim_isaaclab`. This repository also contains a G1 MJCF file for MuJoCo visualization, but `eval_g1_sim.py` does not start MuJoCo by itself. It talks to an external Unitree-compatible simulator through DDS topics and the image server.
+
+The script below wraps the required eval command and auto-picks the newest local checkpoint if `POLICY_PATH` is not set:
+
+```bash
+cd "$PROJECT_ROOT"
+
+bash scripts/eval_g1_sim_after_train.sh
+```
+
+If the checkpoint was trained on another Linux machine, copy the `pretrained_model` folder into this machine first, then set `POLICY_PATH`:
+
+```bash
+POLICY_PATH="$PROJECT_ROOT/lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model" \
+IMAGE_HOST="127.0.0.1" \
+bash scripts/eval_g1_sim_after_train.sh
+```
+
+Use another `IMAGE_HOST` if the simulator image server is not running on the same machine.
+
+Equivalent raw command:
 
 ```bash
 cd "$PROJECT_ROOT"
@@ -410,6 +430,76 @@ When prompted, enter:
 ```text
 s
 ```
+
+### Record Simulation as Video
+
+`eval_g1_sim.py` can save simulator camera frames when `--save_data=true`. The frames are written into:
+
+```text
+data/sim_eval_recordings/episode_XXXX/colors/
+```
+
+and then converted to MP4 by the helper script.
+
+Start the external simulator and image server first, then run:
+
+```bash
+cd "$PROJECT_ROOT"
+
+POLICY_PATH="$PROJECT_ROOT/lerobot/outputs/train/<date>/<run>_act/checkpoints/<step>/pretrained_model" \
+IMAGE_HOST="127.0.0.1" \
+MAX_EPISODES=900 \
+FREQUENCY=30 \
+bash scripts/eval_g1_sim_record_video.sh
+```
+
+At `30Hz`, `MAX_EPISODES=900` records about 30 seconds. Increase or decrease it as needed.
+
+The output MP4 is written to the latest episode directory, for example:
+
+```text
+data/sim_eval_recordings/episode_0001/episode_0001_color_0.mp4
+```
+
+To write the video elsewhere:
+
+```bash
+VIDEO_OUTPUT="$PROJECT_ROOT/data/my_policy_eval.mp4" \
+IMAGE_HOST="127.0.0.1" \
+bash scripts/eval_g1_sim_record_video.sh
+```
+
+To convert an already saved episode manually:
+
+```bash
+python scripts/episode_frames_to_video.py \
+  --task-dir "$PROJECT_ROOT/data/sim_eval_recordings" \
+  --camera color_0 \
+  --fps 30
+```
+
+Notes:
+
+- `color_0` is the first camera stream saved by `EpisodeWriter`; for this HeadcamOnly workflow it corresponds to the head camera stream used by the policy.
+- The eval script saves an episode when the task succeeds or `max_episodes` is reached.
+- If you stop with `Ctrl+C`, the local fork now closes `EpisodeWriter` in `finally`, so already written frames are flushed before conversion is attempted.
+
+### MuJoCo Asset Viewer
+
+The G1 asset folder includes:
+
+```text
+unitree_lerobot/eval_robot/assets/g1/g1_body29_hand14.xml
+```
+
+To view that model in MuJoCo:
+
+```bash
+pip install mujoco
+bash scripts/view_g1_mujoco_asset.sh
+```
+
+This only opens the robot model. It is not the policy evaluation simulator used by `eval_g1_sim.py`.
 
 ## 14. Replay Dataset on Robot
 

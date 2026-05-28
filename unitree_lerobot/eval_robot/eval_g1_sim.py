@@ -206,6 +206,8 @@ def eval_policy(
         if image_info:
             image_client, _ = image_info
             image_client.close()
+        if "episode_writer" in locals() and episode_writer:
+            episode_writer.close()
         # Clean up sim state subscriber if it exists
         if "sim_state_subscriber" in locals() and sim_state_subscriber:
             sim_state_subscriber.stop_subscribe()
