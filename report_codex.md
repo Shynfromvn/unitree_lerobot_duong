@@ -197,7 +197,77 @@ python unitree_lerobot/eval_robot/eval_g1_dataset.py `
     --send_real_robot=false
 ```
 
-### 3. `.gitignore`
+### 3. `unitree_lerobot/eval_robot/eval_g1_sim.py`
+
+Purpose:
+
+- Make simulation evaluation work with the current `make_robot.py` camera API.
+- Make simulation evaluation load the same local dataset root used during training.
+
+Changes:
+
+```python
+image_client, camera_config = image_info
+observation, current_arm_q = process_images_and_observations(image_client, camera_config, arm_ctrl)
+dataset = LeRobotDataset(repo_id=cfg.repo_id, root=cfg.root)
+```
+
+Before:
+
+- `eval_g1_sim.py` expected `setup_image_client()` to return old shared-memory fields such as:
+
+```text
+tv_img_array
+wrist_img_array
+tv_img_shape
+wrist_img_shape
+is_binocular
+has_wrist_cam
+```
+
+- Current `make_robot.py` returns:
+
+```text
+(image_client, image_config)
+```
+
+Why:
+
+- Without this update, simulation would fail after dependency import because the script and image client API no longer matched.
+- Without `root=cfg.root`, the local-only dataset id could again fall back to Hugging Face/cache instead of the generated local dataset.
+
+Cleanup change:
+
+```python
+image_client.close()
+```
+
+This replaces the old shared-memory cleanup path for this script.
+
+### 4. `unitree_lerobot/eval_robot/utils/sim_savedata_utils.py`
+
+Purpose:
+
+- Add a CLI-configurable image server host for simulation.
+
+Change:
+
+```python
+image_host: str = "192.168.123.164"
+```
+
+Why:
+
+- `make_robot.setup_image_client()` reads `args.image_host`.
+- The simulation command can now pass:
+
+```powershell
+--image_host="127.0.0.1"
+```
+
+or the IP address of the machine running the Unitree image server.
+
+### 5. `.gitignore`
 
 Purpose:
 
@@ -240,7 +310,7 @@ Effect:
 - The GitHub repo stays small and reproducible.
 - Teammates regenerate data/checkpoints using README instead of pulling local artifacts from git.
 
-### 4. `report_codex.md`
+### 6. `report_codex.md`
 
 Purpose:
 
@@ -541,6 +611,85 @@ python unitree_lerobot/eval_robot/eval_g1_dataset.py `
     --send_real_robot=false
 ```
 
+### 8. Run checkpoint in Unitree simulation
+
+This was added on 2026-05-28 after the first simulation run failed at import time because `unitree_sdk2py` was missing.
+
+First install the Unitree DDS SDK into the same conda environment:
+
+```powershell
+cd "E:\Vin\du an vindynamic"
+git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
+
+conda activate unitree_lerobot
+cd "E:\Vin\du an vindynamic\unitree_sdk2_python"
+python -m pip install cyclonedds==0.10.2
+python -m pip install -e . --no-deps
+```
+
+Why `--no-deps` was used locally:
+
+- `opencv-python` was already available in the env.
+- A normal `pip install -e .` started downloading a large `opencv-python` wheel and the connection broke.
+- Installing `cyclonedds` explicitly, then installing the SDK with `--no-deps`, completed successfully.
+
+Verify the SDK import:
+
+```powershell
+python -c "import unitree_sdk2py; import cyclonedds; import cv2; print('ok')"
+```
+
+Use the newest 200-step checkpoint from 2026-05-27:
+
+```powershell
+conda activate unitree_lerobot
+
+$PROJECT_ROOT = "E:\Vin\du an vindynamic\unitree_lerobot"
+$DATASET_REPO_ID = "G1_Dex3_PickApple_Dataset_HeadcamOnly"
+$DATASET_DIR = "E:\Vin\du an vindynamic\datasets\G1_Dex3_PickApple_Dataset_HeadcamOnly"
+$POLICY_PATH = Join-Path $PROJECT_ROOT "unitree_lerobot\lerobot\outputs\train\2026-05-27\22-08-33_act\checkpoints\000200\pretrained_model"
+
+cd $PROJECT_ROOT
+
+python unitree_lerobot/eval_robot/eval_g1_sim.py `
+    --policy.path="$POLICY_PATH" `
+    --repo_id=$DATASET_REPO_ID `
+    --root="$DATASET_DIR" `
+    --episodes=0 `
+    --frequency=30 `
+    --arm="G1_29" `
+    --ee="dex3" `
+    --visualization=true `
+    --save_data=false `
+    --task_dir="./data" `
+    --max_episodes=1200 `
+    --image_host="127.0.0.1" `
+    --rename_map='{"observation.images.cam_left_high":"observation.images.head_cam"}'
+```
+
+Notes:
+
+- Change `--image_host` if the image server is not running on the same machine.
+- The rename map is required because the trained policy expects:
+
+```text
+observation.images.head_cam
+```
+
+while the current simulation camera processing emits:
+
+```text
+observation.images.cam_left_high
+```
+
+- When the program asks for the start signal, enter:
+
+```text
+s
+```
+
+- If the next failure is `Failed to get camera configuration`, start the Unitree image server from the simulation side or correct `--image_host`.
+
 ## Ubuntu/Linux copy-run block
 
 Use this on the GPU Ubuntu machine from the repository root. It is the bash equivalent of the PowerShell workflow above.
@@ -617,22 +766,22 @@ python unitree_lerobot/eval_robot/eval_g1_dataset.py \
 Expected relevant modified files before commit:
 
 ```text
-M .gitignore
-M README.md
 M report_codex.md
-M unitree_lerobot/eval_robot/eval_g1_dataset.py
+M unitree_lerobot/eval_robot/eval_g1_sim.py
+M unitree_lerobot/eval_robot/utils/sim_savedata_utils.py
 ```
 
 Recommended commit scope:
 
 ```powershell
-git add .gitignore README.md report_codex.md unitree_lerobot/eval_robot/eval_g1_dataset.py
-git commit -m "Document and fix G1 Dex3 HeadcamOnly training workflow"
+git add report_codex.md unitree_lerobot/eval_robot/eval_g1_sim.py unitree_lerobot/eval_robot/utils/sim_savedata_utils.py
+git commit -m "Document and fix G1 Dex3 simulation evaluation"
 ```
 
 Do not commit:
 
 ```text
+../unitree_sdk2_python/
 datasets/
 outputs/
 checkpoints/

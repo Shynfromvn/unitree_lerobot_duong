@@ -104,17 +104,7 @@ def eval_policy(
                 "reset_pose_publisher",
             ]
         )
-        tv_img_array, wrist_img_array, tv_img_shape, wrist_img_shape, is_binocular, has_wrist_cam = (
-            image_info[key]
-            for key in [
-                "tv_img_array",
-                "wrist_img_array",
-                "tv_img_shape",
-                "wrist_img_shape",
-                "is_binocular",
-                "has_wrist_cam",
-            ]
-        )
+        image_client, camera_config = image_info
 
         # Get initial pose from the first step of the dataset
         from_idx = dataset.meta.episodes["dataset_from_index"][0]
@@ -147,9 +137,7 @@ def eval_policy(
                 loop_start_time = time.perf_counter()
 
                 # 1. Get Observations
-                observation, current_arm_q = process_images_and_observations(
-                    tv_img_array, wrist_img_array, tv_img_shape, wrist_img_shape, is_binocular, has_wrist_cam, arm_ctrl
-                )
+                observation, current_arm_q = process_images_and_observations(image_client, camera_config, arm_ctrl)
                 left_ee_state = right_ee_state = np.array([])
                 if cfg.ee:
                     with ee_shared_mem["lock"]:
@@ -216,7 +204,8 @@ def eval_policy(
         logger_mp.info(f"An error occurred: {e}")
     finally:
         if image_info:
-            cleanup_resources(image_info)
+            image_client, _ = image_info
+            image_client.close()
         # Clean up sim state subscriber if it exists
         if "sim_state_subscriber" in locals() and sim_state_subscriber:
             sim_state_subscriber.stop_subscribe()
@@ -238,7 +227,7 @@ def eval_main(cfg: EvalRealConfig):
 
     logging.info("Making policy.")
 
-    dataset = LeRobotDataset(repo_id=cfg.repo_id)
+    dataset = LeRobotDataset(repo_id=cfg.repo_id, root=cfg.root)
 
     policy = make_policy(cfg=cfg.policy, ds_meta=dataset.meta)
     policy.eval()

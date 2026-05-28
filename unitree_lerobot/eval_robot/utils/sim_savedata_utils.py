@@ -190,6 +190,7 @@ class EvalRealConfig:
     save_data: bool = False
     task_dir: str = "./data"
     max_episodes: int = 1200
+    image_host: str = "192.168.123.164"
     rename_map: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
